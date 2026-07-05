@@ -1,0 +1,406 @@
+{
+    "input": {
+        "mp4_dir": "videos",
+        "fit_path": "activity.fit",
+        "output_dir": "generated_videos"
+    },
+    "processing": {
+        "default_refresh_rate_hz": 14.985,
+        "fit_time_offset_seconds": 0.0,
+        "max_fit_duration_minutes": null
+    },
+    "layout": {
+        "reference_resolution": [3840, 2160],
+        "scale_mode": "fit"
+    },
+    "encoding": {
+        "codec": "libx264",
+        "cq": 20,
+        "crf": 18,
+        "preset": "medium",
+        "pixel_format": "yuv420p",
+        "copy_audio": true,
+        "output_mode": "composited",
+        "noautorotate": false,
+        "ffmpeg_binary": "/usr/bin/ffmpeg",
+        "ffprobe_binary": "/usr/bin/ffprobe"
+    },
+    "styles": {
+        "background": {
+            "type": "solid",
+            "color": [32, 32, 32],
+            "alpha": 0.65
+        },
+        "text": {
+            "color": [255, 255, 255],
+            "thickness": 3
+        }
+    },
+    "features": {
+        "route_progress": {
+            "enabled": true,
+            "gpx_path": "route.gpx",
+            "add_route_altitude": true,
+            "off_route_threshold_m": 150,
+            "search_ahead_m": 5000,
+            "search_behind_m": 300
+        },
+        "route_margin": {
+            "enabled": false,
+            "gpx_path": "route.gpx",
+            "target_speed_kmh": 15,
+            "deadline_time": "2026-05-12 21:30",
+            "timezone": "Asia/Tokyo",
+            "off_route_threshold_m": 150,
+            "search_ahead_m": 5000,
+            "search_behind_m": 300,
+            "progress_column": "route_progress_m",
+            "column": "route_margin_seconds"
+        },
+        "grade": {
+            "enabled": false,
+            "ride": {
+                "enabled": true,
+                "distance_column": "distance",
+                "altitude_column": "altitude",
+                "column": "grade_percent",
+                "window_m": 200
+            },
+            "route": {
+                "enabled": true,
+                "distance_column": "route_progress_m",
+                "altitude_column": "route_altitude_m",
+                "column": "route_grade_percent",
+                "window_m": 200
+            }
+        },
+        "traffic_signals": {
+            "enabled": true,
+            "route_source": "gpx",
+            "gpx_path": "route.gpx",
+            "cache_dir": "cache/osm_features",
+            "bucket_distance_m": 1000,
+            "signal_match_threshold_m": 50,
+            "route_match_threshold_m": 150,
+            "bbox_margin_m": 1000,
+            "column": "traffic_signal_count_per_km"
+        },
+        "place_names": {
+            "enabled": false,
+            "source": "osm_pbf",
+            "route_source": "gpx",
+            "gpx_path": "route.gpx",
+            "pbf_path": "data/osm/japan-latest.osm.pbf",
+            "cache_dir": "cache/osm_features",
+            "admin_levels": [4, 7],
+            "bbox_margin_m": 5000,
+            "name_tags": ["name:ja", "name", "name:en"],
+            "column": "place_name"
+        }
+    },
+    "points_of_interest": {
+        "enabled": true,
+        "sources": [
+            {
+                "type": "gpx_wpt",
+                "gpx_path": "route.gpx"
+            }
+        ],
+        "items": [
+            {
+                "id": "manual_pc",
+                "label": "PC",
+                "distance_m": 50000
+            }
+        ]
+    },
+    "overlays": [
+        {
+            "id": "time",
+            "type": "time",
+            "enabled": true,
+            "x": 50,
+            "y": 50,
+            "width": 954,
+            "height": 100,
+            "refresh_rate_hz": 14.985,
+            "background": {
+                "type": "image",
+                "path": "time_background.png"
+            },
+            "timezone": "Asia/Tokyo",
+            "time_format": "%Y/%m/%d %H:%M:%S",
+            "text": {
+                "position": [200, 70],
+                "font_size": 64,
+                "color": [255, 255, 255],
+                "thickness": 3
+            }
+        },
+        {
+            "id": "speed",
+            "type": "metric",
+            "enabled": true,
+            "x": 50,
+            "y": 200,
+            "width": 500,
+            "height": 100,
+            "refresh_rate_hz": 14.985,
+            "column": "speed",
+            "multiplier": 3.6,
+            "value_format": "Speed {value:.1f} km/h",
+            "empty_text": "-"
+        },
+        {
+            "id": "speed_graph",
+            "type": "graph",
+            "enabled": true,
+            "x": 50,
+            "y": 800,
+            "width": 900,
+            "height": 260,
+            "refresh_rate_hz": 6,
+            "engine": "matplotlib_strip",
+            "plot_type": "line",
+            "line_draw_style": "linear",
+            "viewport_mode": "follow",
+            "follow_anchor_ratio": 0.7,
+            "style_path": "graph_speed.mplstyle",
+            "column": "speed",
+            "multiplier": 3.6,
+            "value_format": "{value:.1f} km/h",
+            "interpolation": "previous",
+            "sample_interval_seconds": 1.0,
+            "window_seconds": 60,
+            "y_min": 0,
+            "y_max": 60,
+            "background": {
+                "type": "solid",
+                "color": [16, 16, 16]
+            },
+            "plot_background_color": [255, 255, 255],
+            "padding": [50, 20, 20, 55],
+            "show_axes": true,
+            "axes_layer_order": "behind",
+            "show_x_axis_labels": true,
+            "show_current_marker": true,
+            "current_marker_color": [255, 80, 80],
+            "show_poi": true,
+            "poi_icon_size": [20, 20],
+            "poi_text": {
+                "font_size": 20,
+                "color": [255, 255, 255],
+                "thickness": 3
+            },
+            "value_text": {
+                "position": [12, 34],
+                "font_size": 29,
+                "color": [255, 255, 255],
+                "thickness": 2
+            }
+        },
+        {
+            "id": "altitude_graph",
+            "type": "graph",
+            "enabled": true,
+            "x": 50,
+            "y": 1080,
+            "width": 900,
+            "height": 260,
+            "refresh_rate_hz": 3,
+            "engine": "matplotlib_strip",
+            "plot_type": "line",
+            "viewport_mode": "overview",
+            "style_path": "graph_altitude.mplstyle",
+            "x_column": "distance",
+            "x_multiplier": 0.001,
+            "x_value_format": "{value:.0f} km",
+            "column": "altitude",
+            "value_format": "{value:.0f} m",
+            "background": {
+                "type": "solid",
+                "color": [16, 16, 16]
+            },
+            "plot_background_color": [255, 255, 255],
+            "padding": [50, 20, 20, 55],
+            "show_axes": true,
+            "axes_layer_order": "behind",
+            "show_x_axis_labels": true,
+            "show_current_marker": true,
+            "current_marker_color": [255, 80, 80],
+            "show_poi": true,
+            "poi_icon_size": [20, 20],
+            "poi_text": {
+                "font_size": 20,
+                "color": [255, 255, 255],
+                "thickness": 3
+            },
+            "value_text": {
+                "position": [12, 34],
+                "font_size": 29,
+                "color": [255, 255, 255],
+                "thickness": 2
+            }
+        },
+        {
+            "id": "signal_graph",
+            "type": "graph",
+            "enabled": true,
+            "x": 50,
+            "y": 1360,
+            "width": 900,
+            "height": 260,
+            "refresh_rate_hz": 3,
+            "engine": "matplotlib_strip",
+            "plot_type": "line",
+            "line_draw_style": "steps-post",
+            "viewport_mode": "overview",
+            "style_path": "graph_signal.mplstyle",
+            "x_column": "route_progress_m",
+            "x_multiplier": 0.001,
+            "x_value_format": "{value:.0f} km",
+            "column": "traffic_signal_count_per_km",
+            "value_format": "{value:.0f} signals/km",
+            "interpolation": "previous",
+            "y_min": 0,
+            "background": {
+                "type": "solid",
+                "color": [16, 16, 16]
+            },
+            "plot_background_color": [255, 255, 255],
+            "padding": [50, 20, 20, 55],
+            "show_axes": true,
+            "axes_layer_order": "behind",
+            "show_x_axis_labels": true,
+            "show_current_marker": true,
+            "current_marker_color": [255, 80, 80],
+            "show_poi": true,
+            "poi_icon_size": [20, 20],
+            "poi_text": {
+                "font_size": 20,
+                "color": [255, 255, 255],
+                "thickness": 3
+            },
+            "value_text": {
+                "position": [12, 34],
+                "font_size": 29,
+                "color": [255, 255, 255],
+                "thickness": 2
+            }
+        },
+        {
+            "id": "place_name",
+            "type": "text",
+            "enabled": false,
+            "x": 50,
+            "y": 1650,
+            "width": 900,
+            "height": 100,
+            "refresh_rate_hz": 2,
+            "background": {
+                "type": "solid",
+                "color": [32, 32, 32],
+                "alpha": 0.75
+            },
+            "column": "place_name",
+            "empty_text": "-",
+            "text": {
+                "position": [280, 70],
+                "font_size": 48,
+                "color": [255, 255, 255],
+                "thickness": 1
+            }
+        },
+        {
+            "id": "route_margin",
+            "type": "metric",
+            "enabled": false,
+            "x": 50,
+            "y": 650,
+            "width": 500,
+            "height": 100,
+            "refresh_rate_hz": 1,
+            "interpolation": "linear",
+            "max_interpolation_gap_seconds": 2.0,
+            "background": {
+                "type": "solid",
+                "color": [32, 32, 32]
+            },
+            "column": "route_margin_seconds",
+            "value_format": "Margin {duration_margin}",
+            "positive_color": [80, 255, 80],
+            "negative_color": [255, 80, 80],
+            "empty_text": "--:--",
+            "text": {
+                "position": [20, 70],
+                "font_scale": 2.0
+            }
+        },
+        {
+            "id": "map_near",
+            "type": "map",
+            "enabled": true,
+            "x": 3000,
+            "y": 50,
+            "width": 800,
+            "height": 800,
+            "refresh_rate_hz": 12,
+            "background": {
+                "alpha": 0.65
+            },
+            "display_size_m": 200,
+            "cache_dir": "cache/tiles",
+            "icon": "icon.png",
+            "icon_size": [100, 100],
+            "directional_icons": {
+                "north": "icon_north.png",
+                "east": "icon_east.png",
+                "south": "icon_south.png",
+                "west": "icon_west.png"
+            },
+            "use_icon": true,
+            "circle_radius": 12,
+            "tile_zoom": 18,
+            "direction_window_radius": 3,
+            "direction_change_confirmations": 1,
+            "direction_min_distance_m": 2.0,
+            "show_poi": true,
+            "poi_icon_size": [32, 32],
+            "poi_text": {
+                "font_size": 20,
+                "color": [255, 255, 255],
+                "thickness": 3
+            }
+        },
+        {
+            "id": "map_overview",
+            "type": "map",
+            "enabled": true,
+            "x": 3000,
+            "y": 900,
+            "width": 800,
+            "height": 800,
+            "refresh_rate_hz": 3,
+            "background": {
+                "alpha": 0.65
+            },
+            "viewport_mode": "route_overview",
+            "cache_dir": "cache/tiles",
+            "gpx_path": "route.gpx",
+            "show_route": true,
+            "show_track": true,
+            "route_color": [255, 180, 0],
+            "track_color": [0, 255, 255],
+            "use_icon": false,
+            "circle_radius": 12,
+            "tile_zoom": 9,
+            "show_poi": true,
+            "poi_icon_size": [18, 18],
+            "poi_text": {
+                "font_size": 20,
+                "color": [255, 255, 255],
+                "thickness": 3
+            }
+        }
+    ]
+}

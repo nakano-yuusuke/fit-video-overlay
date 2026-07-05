@@ -1,0 +1,11 @@
+cartopy
+ffmpeg-python
+fitparse
+matplotlib
+moviepy
+numpy
+opencv-python
+osmium
+pandas
+Pillow
+shapely

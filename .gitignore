@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.vscode/
+
+# Local config and generated outputs
+overlay_config.json
+overlay_config.*.json
+!overlay_config.example.json
+generated_videos/
+output/
+outputs/
+
+# Media and activity data
+*.mp4
+*.mov
+*.mkv
+*.fit
+*.FIT
+*.gpx
+*.GPX
+
+# Local image assets
+icon*.png
+poi_pin.png
+*_background.png
+background.jpg
+
+# Runtime caches
+cache/
+
+# Local analysis artifacts
+*.csv
+df.csv
+df_resampled.csv
+_*.html
+_*.txt
+map
+map*.png
+map*.html
+
+# Exploratory scripts
+test.py
+test2.py

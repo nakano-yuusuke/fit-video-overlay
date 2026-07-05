@@ -1,0 +1,17 @@
+figure.facecolor: 0.06
+axes.facecolor: 0.06
+axes.edgecolor: 0.25
+axes.labelcolor: black
+axes.linewidth: 1.2
+xtick.color: white
+ytick.color: white
+xtick.major.size: 0
+ytick.major.size: 4
+ytick.major.width: 1.0
+grid.color: 0.65
+grid.alpha: 0.40
+grid.linewidth: 0.8
+lines.color: orange
+lines.linewidth: 3.0
+lines.solid_capstyle: round
+path.simplify: True
