@@ -265,6 +265,18 @@ class PlaceNamesFeatureConfig:
 
 
 @dataclass(frozen=True)
+class NextPoiFeatureConfig:
+    enabled: bool = False
+    progress_column: str = "route_progress_m"
+    name_column: str = "next_poi_name"
+    distance_column: str = "next_poi_distance_m"
+    sources: tuple[str, ...] = ()
+    waypoint_types: tuple[str, ...] = ()
+    name_patterns: tuple[str, ...] = ()
+    include_current_distance_m: float = 0.0
+
+
+@dataclass(frozen=True)
 class PointOfInterestSourceConfig:
     type: str
     gpx_path: Path
@@ -335,6 +347,7 @@ class ProcessorConfig:
     grade: GradeFeatureConfig = GradeFeatureConfig()
     traffic_signals: TrafficSignalsFeatureConfig = TrafficSignalsFeatureConfig()
     place_names: PlaceNamesFeatureConfig = PlaceNamesFeatureConfig()
+    next_poi: NextPoiFeatureConfig = NextPoiFeatureConfig()
     points_of_interest: PointsOfInterestConfig = PointsOfInterestConfig()
     layout: LayoutConfig = LayoutConfig()
     still_exports: StillExportConfig = StillExportConfig()
@@ -416,6 +429,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         resources.route_gpx_path,
         resources.osm_pbf_path,
     )
+    next_poi = _parse_next_poi_feature(features.get("next_poi"))
     points_of_interest = _parse_points_of_interest(
         raw.get("points_of_interest"),
         base_dir,
@@ -428,6 +442,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         grade,
         traffic_signals,
         place_names,
+        next_poi,
     )
 
     max_duration = processing.get("max_fit_duration_minutes", 60.0)
@@ -458,6 +473,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         grade=grade,
         traffic_signals=traffic_signals,
         place_names=place_names,
+        next_poi=next_poi,
         points_of_interest=points_of_interest,
         layout=layout,
         still_exports=still_exports,
@@ -1831,6 +1847,60 @@ def _parse_place_names_feature(
     )
 
 
+def _parse_next_poi_feature(raw: Any) -> NextPoiFeatureConfig:
+    if raw is None:
+        return NextPoiFeatureConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("features.next_poiはオブジェクトで指定してください。")
+    unknown = set(raw).difference(
+        {
+            "enabled",
+            "progress_column",
+            "name_column",
+            "distance_column",
+            "sources",
+            "waypoint_types",
+            "name_patterns",
+            "include_current_distance_m",
+        }
+    )
+    if unknown:
+        raise ValueError(
+            f"features.next_poiに未対応の設定があります: {sorted(unknown)}"
+        )
+    name_patterns = _string_tuple(
+        raw.get("name_patterns", ()),
+        "features.next_poi.name_patterns",
+    )
+    for pattern in name_patterns:
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ValueError(
+                "features.next_poi.name_patternsに不正な正規表現があります: "
+                f"{pattern!r}: {error}"
+            ) from error
+    return NextPoiFeatureConfig(
+        enabled=bool(raw.get("enabled", False)),
+        progress_column=str(raw.get("progress_column", "route_progress_m")),
+        name_column=str(raw.get("name_column", "next_poi_name")),
+        distance_column=str(raw.get("distance_column", "next_poi_distance_m")),
+        sources=_string_tuple(
+            raw.get("sources", ()),
+            "features.next_poi.sources",
+        ),
+        waypoint_types=_string_tuple(
+            raw.get("waypoint_types", ()),
+            "features.next_poi.waypoint_types",
+        ),
+        name_patterns=name_patterns,
+        include_current_distance_m=_non_negative_float(
+            raw.get("include_current_distance_m", 0.0),
+            "features.next_poi.include_current_distance_m",
+        ),
+    )
+
+
 def _validate_feature_dependencies(
     overlays: tuple[OverlayDefinition, ...],
     route_progress: RouteProgressFeatureConfig,
@@ -1838,6 +1908,7 @@ def _validate_feature_dependencies(
     grade: GradeFeatureConfig,
     traffic_signals: TrafficSignalsFeatureConfig,
     place_names: PlaceNamesFeatureConfig,
+    next_poi: NextPoiFeatureConfig,
 ) -> None:
     signal_columns = {
         "traffic_signal_count_per_km",
@@ -1861,6 +1932,8 @@ def _validate_feature_dependencies(
     ride_grade_columns = {"grade_percent", grade.ride.column}
     route_grade_columns = {"route_grade_percent", grade.route.column}
     place_name_columns = {"place_name", place_names.column}
+    next_poi_name_columns = {"next_poi_name", next_poi.name_column}
+    next_poi_distance_columns = {"next_poi_distance_m", next_poi.distance_column}
 
     if grade.enabled and grade.route.enabled:
         if not route_progress.enabled:
@@ -1873,6 +1946,14 @@ def _validate_feature_dependencies(
                 "features.grade.route を有効にするには "
                 "features.route_progress.add_route_altitude が必要です。"
             )
+    if (
+        next_poi.enabled
+        and next_poi.progress_column not in available_route_progress_columns
+    ):
+        raise ValueError(
+            "features.next_poi を有効にするには progress_column を生成する "
+            "features.route_progress または features.traffic_signals が必要です。"
+        )
 
     for overlay in overlays:
         if not overlay.enabled:
@@ -1892,10 +1973,23 @@ def _validate_feature_dependencies(
                     f"overlay {overlay.id} は {overlay.column} を参照していますが、"
                     "features.place_names が有効ではありません。"
                 )
+            if overlay.column in next_poi_name_columns and not next_poi.enabled:
+                raise ValueError(
+                    f"overlay {overlay.id} は {overlay.column} を参照していますが、"
+                    "features.next_poi が有効ではありません。"
+                )
         if isinstance(overlay, (MetricOverlayConfig, GraphOverlayConfig)):
             references = {overlay.column}
             if isinstance(overlay, GraphOverlayConfig) and overlay.x_column is not None:
                 references.add(overlay.x_column)
+            if (
+                references.intersection(next_poi_distance_columns)
+                and not next_poi.enabled
+            ):
+                raise ValueError(
+                    f"overlay {overlay.id} は {overlay.column} を参照していますが、"
+                    "features.next_poi が有効ではありません。"
+                )
             if references.intersection(route_margin_columns) and not route_margin.enabled:
                 raise ValueError(
                     f"overlay {overlay.id} は route_margin_seconds を参照していますが、"
@@ -2018,6 +2112,17 @@ def _required(raw: dict[str, Any], key: str) -> Any:
     if key not in raw:
         raise ValueError(f"必須設定がありません: {key}")
     return raw[key]
+
+
+def _string_tuple(value: Any, name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{name}は配列で指定してください。")
+    result = tuple(str(item).strip() for item in value)
+    if any(not item for item in result):
+        raise ValueError(f"{name}には空文字を指定できません。")
+    return result
 
 
 def _resolve_path(base_dir: Path, value: Any) -> Path:
