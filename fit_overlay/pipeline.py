@@ -35,6 +35,7 @@ from .config import (
 from .data import load_fit_data, prepare_overlay_data
 from .frames import FrameMaker
 from .grade import add_grade
+from .next_poi import add_next_poi
 from .overlay_factory import OverlayFactory
 from .place_names import add_place_names
 from .poi import load_points_of_interest
@@ -569,6 +570,12 @@ class OverlayVideoProcessor:
                 default_gpx_path=default_poi_gpx_path,
             )
         logger.info("points_of_interest count=%d", len(points_of_interest))
+        with _timed_step("add_next_poi"):
+            overlay_data = add_next_poi(
+                overlay_data,
+                self.config.next_poi,
+                points_of_interest,
+            )
         self.overlay_factory = OverlayFactory(
             points_of_interest,
             route_progress_column=self.config.route_progress.progress_column,
@@ -973,6 +980,12 @@ class OverlayVideoProcessor:
                 default_gpx_path=default_poi_gpx_path,
             )
         logger.info("points_of_interest count=%d", len(points_of_interest))
+        with _timed_step("add_next_poi"):
+            overlay_data = add_next_poi(
+                overlay_data,
+                self.config.next_poi,
+                points_of_interest,
+            )
         self.overlay_factory = OverlayFactory(
             points_of_interest,
             route_progress_column=self.config.route_progress.progress_column,

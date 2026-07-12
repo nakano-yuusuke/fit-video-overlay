@@ -17,6 +17,7 @@ class PointOfInterest:
     icon_path: Path | None = None
     icon_size: tuple[int, int] | None = None
     name: str | None = None
+    waypoint_type: str | None = None
     source: str = "manual"
     distance_m: float | None = None
     lat: float | None = None
@@ -66,6 +67,7 @@ def load_points_of_interest(
                     icon_path=source.icon,
                     icon_size=source.icon_size,
                     name=waypoint.name or None,
+                    waypoint_type=waypoint.type,
                     source="gpx_wpt",
                     distance_m=progress_m,
                     lat=waypoint.lat,
@@ -101,6 +103,7 @@ def load_points_of_interest(
                 icon_path=item.icon,
                 icon_size=item.icon_size,
                 name=item.name,
+                waypoint_type=None,
                 source="manual",
                 distance_m=distance_m,
                 lat=lat,
