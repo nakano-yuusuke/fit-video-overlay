@@ -35,16 +35,73 @@ def add_next_poi(
     distances = np.asarray([poi.distance_m for poi in targets], dtype=float)
     labels = np.asarray([poi.display_text for poi in targets], dtype=object)
     progress = result[config.progress_column].to_numpy(dtype=float, copy=False)
-    lookup_progress = progress - config.include_current_distance_m
+    if config.never_revisit_passed:
+        names, remaining = _next_poi_monotonic(
+            progress,
+            distances,
+            labels,
+            include_current_distance_m=config.include_current_distance_m,
+        )
+    else:
+        names, remaining = _next_poi_independent(
+            progress,
+            distances,
+            labels,
+            include_current_distance_m=config.include_current_distance_m,
+        )
+
+    result[config.name_column] = names
+    result[config.distance_column] = remaining
+    return result
+
+
+def _next_poi_independent(
+    progress: np.ndarray,
+    distances: np.ndarray,
+    labels: np.ndarray,
+    *,
+    include_current_distance_m: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    lookup_progress = progress - include_current_distance_m
     target_indices = np.searchsorted(distances, lookup_progress, side="left")
+    return _labels_and_remaining(progress, distances, labels, target_indices)
+
+
+def _next_poi_monotonic(
+    progress: np.ndarray,
+    distances: np.ndarray,
+    labels: np.ndarray,
+    *,
+    include_current_distance_m: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    target_indices = np.full(len(progress), len(distances), dtype=int)
+    target_index = 0
+    for row_index, current_progress in enumerate(progress):
+        if not np.isfinite(current_progress):
+            continue
+        while (
+            target_index < len(distances)
+            and current_progress - include_current_distance_m > distances[target_index]
+        ):
+            target_index += 1
+        target_indices[row_index] = target_index
+    return _labels_and_remaining(progress, distances, labels, target_indices)
+
+
+def _labels_and_remaining(
+    progress: np.ndarray,
+    distances: np.ndarray,
+    labels: np.ndarray,
+    target_indices: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
     has_next = (
         np.isfinite(progress)
         & (target_indices >= 0)
         & (target_indices < len(distances))
     )
 
-    names = np.full(len(result), "", dtype=object)
-    remaining = np.full(len(result), np.nan, dtype=float)
+    names = np.full(len(progress), "", dtype=object)
+    remaining = np.full(len(progress), np.nan, dtype=float)
     if has_next.any():
         valid_indices = target_indices[has_next]
         names[has_next] = labels[valid_indices]
@@ -52,10 +109,7 @@ def add_next_poi(
             0.0,
             distances[valid_indices] - progress[has_next],
         )
-
-    result[config.name_column] = names
-    result[config.distance_column] = remaining
-    return result
+    return names, remaining
 
 
 def _target_points(
