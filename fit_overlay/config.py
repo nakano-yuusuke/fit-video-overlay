@@ -274,6 +274,7 @@ class NextPoiFeatureConfig:
     waypoint_types: tuple[str, ...] = ()
     name_patterns: tuple[str, ...] = ()
     include_current_distance_m: float = 0.0
+    never_revisit_passed: bool = False
 
 
 @dataclass(frozen=True)
@@ -1862,6 +1863,7 @@ def _parse_next_poi_feature(raw: Any) -> NextPoiFeatureConfig:
             "waypoint_types",
             "name_patterns",
             "include_current_distance_m",
+            "never_revisit_passed",
         }
     )
     if unknown:
@@ -1898,6 +1900,7 @@ def _parse_next_poi_feature(raw: Any) -> NextPoiFeatureConfig:
             raw.get("include_current_distance_m", 0.0),
             "features.next_poi.include_current_distance_m",
         ),
+        never_revisit_passed=bool(raw.get("never_revisit_passed", False)),
     )
 
 
