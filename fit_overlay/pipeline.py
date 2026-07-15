@@ -32,13 +32,14 @@ from .config import (
     TextColumnOverlayConfig,
     TimeOverlayConfig,
 )
+from .contact_sheet import ContactSheetResult, generate_contact_sheet
 from .data import load_fit_data, prepare_overlay_data
 from .frames import FrameMaker
 from .grade import add_grade
 from .next_poi import add_next_poi
 from .overlay_factory import OverlayFactory
 from .place_names import add_place_names
-from .poi import load_points_of_interest
+from .poi import PointOfInterest, load_points_of_interest
 from .route_features import add_route_progress
 from .route_margin import add_route_margin
 from .text_draw import draw_centered_text, draw_text, font_size_from_cv_scale
@@ -140,6 +141,12 @@ class _MediaTimeOffsetRule:
     from_file: str
 
 
+@dataclass(frozen=True)
+class PreparedMediaData:
+    data: pd.DataFrame
+    points_of_interest: tuple[PointOfInterest, ...]
+
+
 class OverlayVideoProcessor:
     """FIT読み込みから各メディアへのオーバーレイ生成、最終合成までを統括する。"""
 
@@ -161,6 +168,14 @@ class OverlayVideoProcessor:
         """入力ディレクトリ内の全メディアを、実データoverlay付き静止画で出力する。"""
         with _timed_step("write_frame_previews", preview_at=preview_at):
             return self._write_frame_previews(preview_at)
+
+    def write_contact_sheet(self) -> ContactSheetResult:
+        """既存メディア出力を行わず、コンタクトシートとJSONだけを生成する。"""
+        with _timed_step("write_contact_sheet"):
+            with _timed_step("validate_paths"):
+                self._validate_contact_sheet_paths()
+            prepared = self._prepare_media_data()
+            return self._generate_contact_sheet(prepared)
 
     def _write_layout_preview(self, output_path: Path | None) -> Path:
         enabled_overlays = [
@@ -501,25 +516,6 @@ class OverlayVideoProcessor:
         return output_paths
 
     def _load_overlay_specs(self) -> list[OverlaySpec]:
-        max_duration = (
-            None
-            if self.config.max_fit_duration_minutes is None
-            else pd.Timedelta(minutes=self.config.max_fit_duration_minutes)
-        )
-        with _timed_step("load_fit_data", path=self.config.fit_path):
-            fit_data = load_fit_data(
-                self.config.fit_path,
-                time_offset=pd.Timedelta(
-                    seconds=self.config.fit_time_offset_seconds
-                ),
-                max_duration=max_duration,
-            )
-        logger.info(
-            "load_fit_data rows=%d start=%s end=%s",
-            len(fit_data),
-            fit_data.index[0] if len(fit_data) else None,
-            fit_data.index[-1] if len(fit_data) else None,
-        )
         enabled_overlays = [
             overlay for overlay in self.config.overlays if overlay.enabled
         ]
@@ -530,58 +526,13 @@ class OverlayVideoProcessor:
             len(enabled_overlays),
             ",".join(overlay.id for overlay in enabled_overlays),
         )
-        with _timed_step("prepare_overlay_data"):
-            overlay_data = prepare_overlay_data(fit_data)
-        with _timed_step("add_route_progress"):
-            overlay_data = add_route_progress(
-                overlay_data,
-                self.config.route_progress,
-            )
-        with _timed_step("add_grade"):
-            overlay_data = add_grade(
-                overlay_data,
-                self.config.grade,
-            )
-        with _timed_step("add_route_margin"):
-            overlay_data = add_route_margin(
-                overlay_data,
-                self.config.route_margin,
-            )
-        with _timed_step("add_traffic_signal_counts"):
-            overlay_data = add_traffic_signal_counts(
-                overlay_data,
-                self.config.traffic_signals,
-            )
-        with _timed_step("add_place_names"):
-            overlay_data = add_place_names(
-                overlay_data,
-                self.config.place_names,
-            )
-        default_poi_gpx_path = (
-            self.config.points_of_interest.gpx_path
-            or self.config.route_progress.gpx_path
-            or self.config.route_margin.gpx_path
-            or self.config.traffic_signals.gpx_path
-            or self.config.place_names.gpx_path
-        )
-        with _timed_step("load_points_of_interest"):
-            points_of_interest = load_points_of_interest(
-                self.config.points_of_interest,
-                default_gpx_path=default_poi_gpx_path,
-            )
-        logger.info("points_of_interest count=%d", len(points_of_interest))
-        with _timed_step("add_next_poi"):
-            overlay_data = add_next_poi(
-                overlay_data,
-                self.config.next_poi,
-                points_of_interest,
-            )
+        prepared = self._prepare_media_data()
         self.overlay_factory = OverlayFactory(
-            points_of_interest,
+            prepared.points_of_interest,
             route_progress_column=self.config.route_progress.progress_column,
         )
         with _timed_step("create_overlay_specs"):
-            overlays = self._create_overlay_specs(overlay_data)
+            overlays = self._create_overlay_specs(prepared.data)
         for spec in overlays:
             with _timed_step("warmup_overlay", overlay=spec.config.id):
                 spec.frame_maker.warmup()
@@ -904,23 +855,17 @@ class OverlayVideoProcessor:
             label += f"-{milliseconds:03d}"
         return label
 
-    def _run(self) -> None:
-        with _timed_step("validate_paths"):
-            self._validate_paths()
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+    def _prepare_media_data(self) -> PreparedMediaData:
+        """FITと全派生列を、すべての出力機能で共有できる形へ準備する。"""
         max_duration = (
             None
             if self.config.max_fit_duration_minutes is None
             else pd.Timedelta(minutes=self.config.max_fit_duration_minutes)
         )
         with _timed_step("load_fit_data", path=self.config.fit_path):
-            # FITは一度だけ読み込み、すべての入力メディアで共有する。
-            # カメラとFITの時計にずれがある場合は、設定した秒数だけFIT時刻を補正する。
             fit_data = load_fit_data(
                 self.config.fit_path,
-                time_offset=pd.Timedelta(
-                    seconds=self.config.fit_time_offset_seconds
-                ),
+                time_offset=pd.Timedelta(seconds=self.config.fit_time_offset_seconds),
                 max_duration=max_duration,
             )
         logger.info(
@@ -929,6 +874,58 @@ class OverlayVideoProcessor:
             fit_data.index[0] if len(fit_data) else None,
             fit_data.index[-1] if len(fit_data) else None,
         )
+        with _timed_step("prepare_overlay_data"):
+            data = prepare_overlay_data(fit_data)
+        with _timed_step("add_route_progress"):
+            data = add_route_progress(data, self.config.route_progress)
+        with _timed_step("add_grade"):
+            data = add_grade(data, self.config.grade)
+        with _timed_step("add_route_margin"):
+            data = add_route_margin(data, self.config.route_margin)
+        with _timed_step("add_traffic_signal_counts"):
+            data = add_traffic_signal_counts(data, self.config.traffic_signals)
+        with _timed_step("add_place_names"):
+            data = add_place_names(data, self.config.place_names)
+        default_poi_gpx_path = (
+            self.config.points_of_interest.gpx_path
+            or self.config.route_progress.gpx_path
+            or self.config.route_margin.gpx_path
+            or self.config.traffic_signals.gpx_path
+            or self.config.place_names.gpx_path
+        )
+        with _timed_step("load_points_of_interest"):
+            points = load_points_of_interest(
+                self.config.points_of_interest,
+                default_gpx_path=default_poi_gpx_path,
+            )
+        logger.info("points_of_interest count=%d", len(points))
+        with _timed_step("add_next_poi"):
+            data = add_next_poi(data, self.config.next_poi, points)
+        return PreparedMediaData(data=data, points_of_interest=points)
+
+    def _generate_contact_sheet(
+        self, prepared: PreparedMediaData
+    ) -> ContactSheetResult:
+        return generate_contact_sheet(
+            self.config,
+            prepared.data,
+            read_video_raw_time=self._read_shot_time,
+            read_video_time=self._read_video_shot_time,
+            media_offset_for=self._media_time_offset_for,
+            read_video_frame=lambda path, seconds, width, height: self._read_video_frame(
+                path,
+                seconds,
+                video_width=width,
+                video_height=height,
+            ),
+            read_image_time=self._read_image_shot_time,
+            read_image=self._read_image,
+        )
+
+    def _run(self) -> None:
+        with _timed_step("validate_paths"):
+            self._validate_paths()
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
         enabled_overlays = [
             overlay for overlay in self.config.overlays if overlay.enabled
         ]
@@ -939,59 +936,15 @@ class OverlayVideoProcessor:
             len(enabled_overlays),
             ",".join(overlay.id for overlay in enabled_overlays),
         )
-        # FITの行は増やさず欠損だけ補完する。表示頻度はoverlayごとのfpsで決める。
-        with _timed_step("prepare_overlay_data"):
-            overlay_data = prepare_overlay_data(fit_data)
-        with _timed_step("add_route_progress"):
-            overlay_data = add_route_progress(
-                overlay_data,
-                self.config.route_progress,
-            )
-        with _timed_step("add_grade"):
-            overlay_data = add_grade(
-                overlay_data,
-                self.config.grade,
-            )
-        with _timed_step("add_route_margin"):
-            overlay_data = add_route_margin(
-                overlay_data,
-                self.config.route_margin,
-            )
-        with _timed_step("add_traffic_signal_counts"):
-            overlay_data = add_traffic_signal_counts(
-                overlay_data,
-                self.config.traffic_signals,
-            )
-        with _timed_step("add_place_names"):
-            overlay_data = add_place_names(
-                overlay_data,
-                self.config.place_names,
-            )
-        default_poi_gpx_path = (
-            self.config.points_of_interest.gpx_path
-            or self.config.route_progress.gpx_path
-            or self.config.route_margin.gpx_path
-            or self.config.traffic_signals.gpx_path
-            or self.config.place_names.gpx_path
-        )
-        with _timed_step("load_points_of_interest"):
-            points_of_interest = load_points_of_interest(
-                self.config.points_of_interest,
-                default_gpx_path=default_poi_gpx_path,
-            )
-        logger.info("points_of_interest count=%d", len(points_of_interest))
-        with _timed_step("add_next_poi"):
-            overlay_data = add_next_poi(
-                overlay_data,
-                self.config.next_poi,
-                points_of_interest,
-            )
+        prepared = self._prepare_media_data()
+        if self.config.contact_sheet.enabled:
+            self._generate_contact_sheet(prepared)
         self.overlay_factory = OverlayFactory(
-            points_of_interest,
+            prepared.points_of_interest,
             route_progress_column=self.config.route_progress.progress_column,
         )
         with _timed_step("create_overlay_specs"):
-            overlays = self._create_overlay_specs(overlay_data)
+            overlays = self._create_overlay_specs(prepared.data)
 
         # route_overview などメディア間で共通な静的部分を親プロセスで事前レンダリング。
         # fork 後は動画処理の子プロセスが copy-on-write で共有する。
@@ -1178,6 +1131,25 @@ class OverlayVideoProcessor:
             raise ValueError("video_crfは0から51の範囲で指定してください。")
         if not 0 <= self.config.video_cq <= 51:
             raise ValueError("video_cqは0から51の範囲で指定してください。")
+
+    def _validate_contact_sheet_paths(self) -> None:
+        if not self.config.mp4_dir.is_dir():
+            raise NotADirectoryError(self.config.mp4_dir)
+        if not self.config.fit_path.is_file():
+            raise FileNotFoundError(self.config.fit_path)
+        media_paths = tuple(
+            path
+            for path in self.config.mp4_dir.iterdir()
+            if path.is_file()
+            and path.suffix.lower() in VIDEO_SUFFIXES | IMAGE_SUFFIXES
+        )
+        if not media_paths:
+            raise ValueError(f"対象の動画・静止画がありません: {self.config.mp4_dir}")
+        has_video = any(path.suffix.lower() in VIDEO_SUFFIXES for path in media_paths)
+        if has_video and not self.config.ffmpeg_binary.is_file():
+            raise FileNotFoundError(self.config.ffmpeg_binary)
+        if has_video and not self.config.ffprobe_binary.is_file():
+            raise FileNotFoundError(self.config.ffprobe_binary)
 
     def _layout_scale(self, media_width: int, media_height: int) -> float:
         if self.config.layout.reference_resolution is None:
