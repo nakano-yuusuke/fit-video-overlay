@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 Color = tuple[int, int, int]
@@ -326,6 +328,38 @@ class MediaTimeOffsetConfig:
     offset_seconds: float
 
 
+@dataclass(frozen=True)
+class ContactSheetJsonFieldConfig:
+    source_column: str
+    output_name: str
+    multiplier: float = 1.0
+    decimals: int | None = None
+
+
+@dataclass(frozen=True)
+class ContactSheetConfig:
+    enabled: bool = False
+    output_dir: Path = Path("contact_sheet")
+    interval_seconds: float = 5.0
+    start_margin_seconds: float = 1.0
+    end_margin_seconds: float = 0.5
+    ensure_at_least_one_frame: bool = True
+    columns: int = 6
+    rows: int = 6
+    thumbnail_width: int = 640
+    thumbnail_height: int = 360
+    label_height: int = 40
+    image_format: str = "jpg"
+    jpeg_quality: int = 88
+    background_color: Color = (0, 0, 0)
+    timezone: str = "Asia/Tokyo"
+    time_format: str = "%m/%d %H:%M:%S"
+    json_filename: str = "contact_sheet.json"
+    write_debug_json: bool = False
+    overwrite: bool = True
+    json_fields: tuple[ContactSheetJsonFieldConfig, ...] = ()
+
+
 OverlayDefinition = (
     TimeOverlayConfig
     | MetricOverlayConfig
@@ -352,6 +386,7 @@ class ProcessorConfig:
     points_of_interest: PointsOfInterestConfig = PointsOfInterestConfig()
     layout: LayoutConfig = LayoutConfig()
     still_exports: StillExportConfig = StillExportConfig()
+    contact_sheet: ContactSheetConfig = ContactSheetConfig()
     default_refresh_rate_hz: float = 59.94 / 4
     fit_time_offset_seconds: float = 0.0
     media_time_offsets: tuple[MediaTimeOffsetConfig, ...] = ()
@@ -386,9 +421,9 @@ def load_processor_config(path: Path) -> ProcessorConfig:
     layout = _parse_layout(raw.get("layout"))
     still_exports = _parse_still_exports(raw.get("still_exports"))
     styles = _parse_styles(raw.get("styles"), base_dir)
-    overlay_items = raw.get("overlays")
-    if not isinstance(overlay_items, list) or not overlay_items:
-        raise ValueError("overlaysには1件以上の配列を指定してください。")
+    overlay_items = raw.get("overlays", [])
+    if not isinstance(overlay_items, list):
+        raise ValueError("overlaysは配列で指定してください。")
 
     default_refresh_rate_hz = _positive_float(
         processing.get("default_refresh_rate_hz", 59.94 / 4),
@@ -459,6 +494,9 @@ def load_processor_config(path: Path) -> ProcessorConfig:
             "encoding.output_modeはcompositedまたはtransparent_overlayを指定してください。"
         )
 
+    output_dir = _resolve_path(base_dir, _required(input_config, "output_dir"))
+    contact_sheet = _parse_contact_sheet(raw.get("contact_sheet"), output_dir)
+
     return ProcessorConfig(
         mp4_dir=_resolve_path(base_dir, _required(input_config, "mp4_dir")),
         fit_path=_resolve_path(
@@ -467,7 +505,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
             if resources.fit_path is not None
             else _required(input_config, "fit_path"),
         ),
-        output_dir=_resolve_path(base_dir, _required(input_config, "output_dir")),
+        output_dir=output_dir,
         overlays=overlays,
         route_progress=route_progress,
         route_margin=route_margin,
@@ -478,6 +516,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         points_of_interest=points_of_interest,
         layout=layout,
         still_exports=still_exports,
+        contact_sheet=contact_sheet,
         default_refresh_rate_hz=default_refresh_rate_hz,
         fit_time_offset_seconds=float(
             processing.get("fit_time_offset_seconds", 0.0)
@@ -503,6 +542,138 @@ def load_processor_config(path: Path) -> ProcessorConfig:
             encoding.get("ffprobe_binary", "/usr/bin/ffprobe"),
         ),
         max_parallel_videos=int(processing.get("max_parallel_videos", 1)),
+    )
+
+
+def _parse_contact_sheet(raw: Any, output_dir: Path) -> ContactSheetConfig:
+    if raw is None:
+        return replace(ContactSheetConfig(), output_dir=output_dir / "contact_sheet")
+    if not isinstance(raw, dict):
+        raise ValueError("contact_sheetはオブジェクトで指定してください。")
+    allowed = {
+        "enabled", "output_dir", "interval_seconds", "start_margin_seconds",
+        "end_margin_seconds", "ensure_at_least_one_frame", "columns", "rows",
+        "thumbnail_width", "thumbnail_height", "label_height", "image_format",
+        "jpeg_quality", "background_color", "timezone", "time_format",
+        "json_filename", "write_debug_json", "overwrite", "json_fields",
+    }
+    unknown = set(raw).difference(allowed)
+    if unknown:
+        raise ValueError(f"contact_sheetに未対応の設定があります: {sorted(unknown)}")
+
+    timezone = str(raw.get("timezone", "Asia/Tokyo"))
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise ValueError(f"contact_sheet.timezoneが不正です: {timezone}") from error
+
+    image_format = str(raw.get("image_format", "jpg")).lower()
+    if image_format not in {"jpg", "png"}:
+        raise ValueError("contact_sheet.image_formatはjpgまたはpngを指定してください。")
+    jpeg_quality = int(raw.get("jpeg_quality", 88))
+    if not 1 <= jpeg_quality <= 100:
+        raise ValueError("contact_sheet.jpeg_qualityは1から100で指定してください。")
+
+    json_fields_raw = raw.get("json_fields", [])
+    if not isinstance(json_fields_raw, list):
+        raise ValueError("contact_sheet.json_fieldsは配列で指定してください。")
+    json_fields: list[ContactSheetJsonFieldConfig] = []
+    output_names: set[str] = set()
+    for index, item in enumerate(json_fields_raw):
+        path = f"contact_sheet.json_fields[{index}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}はオブジェクトで指定してください。")
+        unknown_field = set(item).difference(
+            {"source_column", "output_name", "multiplier", "decimals"}
+        )
+        if unknown_field:
+            raise ValueError(f"{path}に未対応の設定があります: {sorted(unknown_field)}")
+        source_column = str(_required(item, "source_column")).strip()
+        output_name = str(_required(item, "output_name")).strip()
+        if not source_column:
+            raise ValueError(f"{path}.source_columnは空にできません。")
+        if not output_name:
+            raise ValueError(f"{path}.output_nameは空にできません。")
+        if output_name in output_names:
+            raise ValueError(f"contact_sheet.json_fields.output_nameが重複しています: {output_name}")
+        output_names.add(output_name)
+        decimals_raw = item.get("decimals")
+        decimals = None if decimals_raw is None else int(decimals_raw)
+        if decimals is not None and decimals < 0:
+            raise ValueError(f"{path}.decimalsは0以上で指定してください。")
+        multiplier = float(item.get("multiplier", 1.0))
+        if not math.isfinite(multiplier):
+            raise ValueError(f"{path}.multiplierは有限値で指定してください。")
+        json_fields.append(
+            ContactSheetJsonFieldConfig(
+                source_column=source_column,
+                output_name=output_name,
+                multiplier=multiplier,
+                decimals=decimals,
+            )
+        )
+
+    relative_output = Path(raw.get("output_dir", "contact_sheet"))
+    contact_output_dir = (
+        relative_output if relative_output.is_absolute() else output_dir / relative_output
+    )
+    interval_seconds = _positive_float(
+        raw.get("interval_seconds", 5.0), "contact_sheet.interval_seconds"
+    )
+    start_margin_seconds = _non_negative_float(
+        raw.get("start_margin_seconds", 1.0), "contact_sheet.start_margin_seconds"
+    )
+    end_margin_seconds = _non_negative_float(
+        raw.get("end_margin_seconds", 0.5), "contact_sheet.end_margin_seconds"
+    )
+    if not all(
+        math.isfinite(value)
+        for value in (interval_seconds, start_margin_seconds, end_margin_seconds)
+    ):
+        raise ValueError("contact_sheetの間隔と余白は有限値で指定してください。")
+    columns = int(raw.get("columns", 6))
+    rows = int(raw.get("rows", 6))
+    thumbnail_width = int(raw.get("thumbnail_width", 640))
+    thumbnail_height = int(raw.get("thumbnail_height", 360))
+    label_height = int(raw.get("label_height", 40))
+    if columns <= 0 or rows <= 0:
+        raise ValueError("contact_sheet.columnsとrowsは正の整数で指定してください。")
+    if thumbnail_width <= 0 or thumbnail_height <= 0:
+        raise ValueError("contact_sheet.thumbnail_widthとthumbnail_heightは正の整数で指定してください。")
+    if label_height < 0:
+        raise ValueError("contact_sheet.label_heightは0以上で指定してください。")
+    background_color = _pair_or_triplet(
+        raw.get("background_color", [0, 0, 0]),
+        "contact_sheet.background_color",
+        3,
+    )
+    if any(component < 0 or component > 255 for component in background_color):
+        raise ValueError("contact_sheet.background_colorは0から255で指定してください。")
+    json_filename = str(raw.get("json_filename", "contact_sheet.json")).strip()
+    if not json_filename or Path(json_filename).name != json_filename:
+        raise ValueError("contact_sheet.json_filenameはファイル名だけを指定してください。")
+
+    return ContactSheetConfig(
+        enabled=bool(raw.get("enabled", False)),
+        output_dir=contact_output_dir,
+        interval_seconds=interval_seconds,
+        start_margin_seconds=start_margin_seconds,
+        end_margin_seconds=end_margin_seconds,
+        ensure_at_least_one_frame=bool(raw.get("ensure_at_least_one_frame", True)),
+        columns=columns,
+        rows=rows,
+        thumbnail_width=thumbnail_width,
+        thumbnail_height=thumbnail_height,
+        label_height=label_height,
+        image_format=image_format,
+        jpeg_quality=jpeg_quality,
+        background_color=background_color,
+        timezone=timezone,
+        time_format=str(raw.get("time_format", "%m/%d %H:%M:%S")),
+        json_filename=json_filename,
+        write_debug_json=bool(raw.get("write_debug_json", False)),
+        overwrite=bool(raw.get("overwrite", True)),
+        json_fields=tuple(json_fields),
     )
 
 

@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from fit_overlay.config import (
+    ContactSheetConfig,
     MapOverlayConfig,
     ProcessorConfig,
     default_overlay_configs,
@@ -49,6 +50,11 @@ def parse_args() -> argparse.Namespace:
         "--preview-frame",
         action="store_true",
         help="入力ディレクトリ内の全メディアへ実データoverlayを重ねた静止画を出力する",
+    )
+    parser.add_argument(
+        "--contact-sheet-only",
+        action="store_true",
+        help="設定のenabledに関係なくコンタクトシートとJSONだけを生成する",
     )
     parser.add_argument(
         "--preview-at",
@@ -110,6 +116,9 @@ def build_config(args: argparse.Namespace) -> ProcessorConfig:
             output_dir=args.output_dir,
             overlays=default_overlay_configs(asset_dir, refresh_rate_hz),
             default_refresh_rate_hz=refresh_rate_hz,
+            contact_sheet=ContactSheetConfig(
+                output_dir=args.output_dir / "contact_sheet"
+            ),
         )
 
     updates = {
@@ -154,12 +163,26 @@ def main() -> None:
     from fit_overlay.pipeline import OverlayVideoProcessor
 
     processor = OverlayVideoProcessor(build_config(args))
+    selected_modes = sum(
+        bool(value)
+        for value in (
+            args.preview_layout,
+            args.preview_frame,
+            args.contact_sheet_only,
+        )
+    )
+    if selected_modes > 1:
+        raise ValueError(
+            "--preview-layout、--preview-frame、--contact-sheet-onlyは同時指定できません。"
+        )
     if args.preview_layout:
         processor.write_layout_preview(args.preview_output)
     elif args.preview_frame:
         if args.preview_at is None:
             raise ValueError("--preview-frameには--preview-atを指定してください。")
         processor.write_frame_previews(args.preview_at)
+    elif args.contact_sheet_only:
+        processor.write_contact_sheet()
     else:
         processor.run()
 
