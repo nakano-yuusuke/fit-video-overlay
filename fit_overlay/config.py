@@ -323,6 +323,15 @@ class StillExportConfig:
 
 
 @dataclass(frozen=True)
+class StillImageConfig:
+    """静止画入力をoverlay合成前に配置するcanvas設定。"""
+
+    canvas_resolution: tuple[int, int] | None = None
+    resize_mode: str = "original"
+    background_color: Color = (0, 0, 0)
+
+
+@dataclass(frozen=True)
 class MediaTimeOffsetConfig:
     from_file: str
     offset_seconds: float
@@ -386,6 +395,7 @@ class ProcessorConfig:
     points_of_interest: PointsOfInterestConfig = PointsOfInterestConfig()
     layout: LayoutConfig = LayoutConfig()
     still_exports: StillExportConfig = StillExportConfig()
+    still_images: StillImageConfig = StillImageConfig()
     contact_sheet: ContactSheetConfig = ContactSheetConfig()
     default_refresh_rate_hz: float = 59.94 / 4
     fit_time_offset_seconds: float = 0.0
@@ -395,6 +405,10 @@ class ProcessorConfig:
     video_crf: int = 18
     video_cq: int = 20
     video_preset: str = "medium"
+    video_bframes: int | None = None
+    video_gop_size: int | None = None
+    video_no_scenecut: bool = False
+    video_strict_gop: bool = False
     pixel_format: str = "yuv420p"
     copy_audio: bool = True
     output_mode: str = "composited"
@@ -420,6 +434,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
     features = _mapping(raw, "features", required=False)
     layout = _parse_layout(raw.get("layout"))
     still_exports = _parse_still_exports(raw.get("still_exports"))
+    still_images = _parse_still_images(raw.get("still_images"), layout)
     styles = _parse_styles(raw.get("styles"), base_dir)
     overlay_items = raw.get("overlays", [])
     if not isinstance(overlay_items, list):
@@ -494,6 +509,16 @@ def load_processor_config(path: Path) -> ProcessorConfig:
             "encoding.output_modeはcompositedまたはtransparent_overlayを指定してください。"
         )
 
+    video_bframes = encoding.get("bframes")
+    if video_bframes is not None:
+        video_bframes = int(video_bframes)
+        if video_bframes < 0:
+            raise ValueError("encoding.bframesは0以上の整数で指定してください。")
+
+    video_gop_size = encoding.get("gop_size")
+    if video_gop_size is not None:
+        video_gop_size = _positive_int(video_gop_size, "encoding.gop_size")
+
     output_dir = _resolve_path(base_dir, _required(input_config, "output_dir"))
     contact_sheet = _parse_contact_sheet(raw.get("contact_sheet"), output_dir)
 
@@ -516,6 +541,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         points_of_interest=points_of_interest,
         layout=layout,
         still_exports=still_exports,
+        still_images=still_images,
         contact_sheet=contact_sheet,
         default_refresh_rate_hz=default_refresh_rate_hz,
         fit_time_offset_seconds=float(
@@ -529,6 +555,10 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         video_crf=int(encoding.get("crf", 18)),
         video_cq=int(encoding.get("cq", 20)),
         video_preset=str(encoding.get("preset", "medium")),
+        video_bframes=video_bframes,
+        video_gop_size=video_gop_size,
+        video_no_scenecut=bool(encoding.get("no_scenecut", False)),
+        video_strict_gop=bool(encoding.get("strict_gop", False)),
         pixel_format=str(encoding.get("pixel_format", "yuv420p")),
         copy_audio=bool(encoding.get("copy_audio", True)),
         output_mode=output_mode,
@@ -1341,6 +1371,53 @@ def _parse_layout(raw: Any) -> LayoutConfig:
     return LayoutConfig(
         reference_resolution=reference_resolution or (3840, 2160),
         scale_mode=scale_mode,
+    )
+
+
+def _parse_still_images(raw: Any, layout: LayoutConfig) -> StillImageConfig:
+    if raw is None:
+        return StillImageConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("still_imagesはオブジェクトで指定してください。")
+    unknown = set(raw).difference(
+        {"canvas_resolution", "resize_mode", "background_color"}
+    )
+    if unknown:
+        raise ValueError(
+            f"still_imagesに未対応の設定があります: {sorted(unknown)}"
+        )
+
+    resize_mode = str(raw.get("resize_mode", "original"))
+    if resize_mode not in {"original", "contain"}:
+        raise ValueError(
+            "still_images.resize_modeはoriginalまたはcontainを指定してください。"
+        )
+    canvas_resolution = _optional_size(
+        raw.get("canvas_resolution"),
+        "still_images.canvas_resolution",
+    )
+    if resize_mode == "contain":
+        canvas_resolution = canvas_resolution or layout.reference_resolution
+        if canvas_resolution is None:
+            raise ValueError(
+                "still_images.resize_mode=containにはcanvas_resolutionまたは"
+                "layout.reference_resolutionが必要です。"
+            )
+
+    background_raw = raw.get("background_color", [0, 0, 0])
+    background_color = _pair_or_triplet(
+        background_raw,
+        "still_images.background_color",
+        3,
+    )
+    if any(component < 0 or component > 255 for component in background_color):
+        raise ValueError(
+            "still_images.background_colorは0から255の範囲で指定してください。"
+        )
+    return StillImageConfig(
+        canvas_resolution=canvas_resolution,
+        resize_mode=resize_mode,
+        background_color=background_color,
     )
 
 
