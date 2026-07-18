@@ -715,6 +715,7 @@ class OverlayVideoProcessor:
             base_image = self._read_image(image_path)
             shot_time = self._read_image_shot_time(image_path)
             source_has_alpha = base_image.shape[2] == 4
+            base_image = self._prepare_still_image(base_image)
             suffix = (
                 ".png"
                 if source_has_alpha or image_path.suffix.lower() == ".png"
@@ -1267,16 +1268,25 @@ class OverlayVideoProcessor:
         self, image_path: Path, overlays: list[OverlaySpec]
     ) -> None:
         base_image = self._read_image(image_path)
-        image_height, image_width = base_image.shape[:2]
+        source_height, source_width = base_image.shape[:2]
+        source_has_alpha = base_image.shape[2] == 4
+        canvas_width, canvas_height = self._still_image_canvas_size(
+            source_width,
+            source_height,
+        )
         shot_time = self._read_image_shot_time(image_path)
         still_duration = 1.0
         logger.info(
-            "image_metadata path=%s size=%dx%d shot_time=%s mode=%s",
+            "image_metadata path=%s source_size=%dx%d canvas_size=%dx%d "
+            "shot_time=%s mode=%s resize_mode=%s",
             image_path,
-            image_width,
-            image_height,
+            source_width,
+            source_height,
+            canvas_width,
+            canvas_height,
             shot_time,
             self.config.output_mode,
+            self.config.still_images.resize_mode,
         )
         self._log_media_data_coverage(
             image_path,
@@ -1284,7 +1294,7 @@ class OverlayVideoProcessor:
             still_duration,
             overlays,
         )
-        scale = self._layout_scale(image_width, image_height)
+        scale = self._layout_scale(canvas_width, canvas_height)
         for spec in overlays:
             with _timed_step(
                 "prepare_overlay_image",
@@ -1294,7 +1304,7 @@ class OverlayVideoProcessor:
                 spec.frame_maker.prepare_video(shot_time, still_duration)
 
         if self.config.output_mode == "transparent_overlay":
-            canvas = np.zeros((image_height, image_width, 4), dtype=np.uint8)
+            canvas = np.zeros((canvas_height, canvas_width, 4), dtype=np.uint8)
             output_path = self.config.output_dir / f"{image_path.stem}_overlay.png"
             output = self._compose_image_overlays(
                 canvas,
@@ -1302,8 +1312,7 @@ class OverlayVideoProcessor:
                 layout_scale=scale,
             )
         else:
-            source_has_alpha = base_image.shape[2] == 4
-            canvas = self._rgba_frame(base_image)
+            canvas = self._rgba_frame(self._prepare_still_image(base_image))
             output_path = self._composited_image_output_path(
                 image_path,
                 source_has_alpha=source_has_alpha,
@@ -1317,6 +1326,59 @@ class OverlayVideoProcessor:
                 output = output[:, :, :3]
 
         self._write_image(output_path, output)
+
+    def _still_image_canvas_size(
+        self,
+        source_width: int,
+        source_height: int,
+    ) -> tuple[int, int]:
+        still_images = self.config.still_images
+        if still_images.resize_mode == "original":
+            return source_width, source_height
+        if still_images.resize_mode == "contain":
+            if still_images.canvas_resolution is None:
+                raise ValueError(
+                    "still_images.resize_mode=containにcanvas_resolutionが必要です。"
+                )
+            return still_images.canvas_resolution
+        raise ValueError(
+            f"未対応のstill_images.resize_modeです: {still_images.resize_mode}"
+        )
+
+    def _prepare_still_image(self, image: np.ndarray) -> np.ndarray:
+        source_height, source_width = image.shape[:2]
+        canvas_width, canvas_height = self._still_image_canvas_size(
+            source_width,
+            source_height,
+        )
+        if (canvas_width, canvas_height) == (source_width, source_height):
+            return image
+
+        scale = min(canvas_width / source_width, canvas_height / source_height)
+        resized_width = min(canvas_width, max(1, int(round(source_width * scale))))
+        resized_height = min(canvas_height, max(1, int(round(source_height * scale))))
+        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized = cv2.resize(
+            image,
+            (resized_width, resized_height),
+            interpolation=interpolation,
+        )
+
+        background_color = self.config.still_images.background_color
+        canvas = np.full(
+            (canvas_height, canvas_width, 4),
+            (*background_color, 255),
+            dtype=np.uint8,
+        )
+        x = (canvas_width - resized_width) // 2
+        y = (canvas_height - resized_height) // 2
+        self._overlay_rgba_at(
+            canvas,
+            self._rgba_frame(resized),
+            x=x,
+            y=y,
+        )
+        return canvas
 
     def _compose_image_overlays(
         self,
@@ -1820,8 +1882,16 @@ class OverlayVideoProcessor:
         if self.config.video_codec.endswith("_nvenc"):
             # NVENCはCRFではなくCQで品質を指定する。
             output_options["cq"] = self.config.video_cq
+            if self.config.video_no_scenecut:
+                output_options["no-scenecut"] = 1
+            if self.config.video_strict_gop:
+                output_options["strict_gop"] = 1
         else:
             output_options["crf"] = self.config.video_crf
+        if self.config.video_bframes is not None:
+            output_options["bf"] = self.config.video_bframes
+        if self.config.video_gop_size is not None:
+            output_options["g"] = self.config.video_gop_size
         return output_options
 
     @staticmethod

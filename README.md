@@ -97,10 +97,17 @@ Top-level sections:
 | `contact_sheet` | Optional chronological source-media contact sheets and JSON. Relative `output_dir` values are resolved below `input.output_dir`. |
 | `layout.reference_resolution` | Reference media size for overlay layout coordinates, e.g. `[3840, 2160]`. |
 | `layout.scale_mode` | Layout scaling mode. `fit` scales overlays uniformly to each input media file's resolution. |
+| `still_images.canvas_resolution` | Output canvas size for still-image inputs. |
+| `still_images.resize_mode` | `original` preserves the source size; `contain` fits the entire image inside the canvas without cropping. |
+| `still_images.background_color` | RGB color used to fill unused canvas space in `contain` mode. |
 | `encoding.codec` | FFmpeg video codec for the final output. |
 | `encoding.cq` | Constant quality value for codecs that use CQ, such as NVENC. |
 | `encoding.crf` | Constant rate factor for codecs that use CRF, such as x264/x265. |
 | `encoding.preset` | FFmpeg encoder preset. |
+| `encoding.bframes` | Optional maximum number of B-frames, passed as FFmpeg `-bf`. Use `0` to disable B-frames. |
+| `encoding.gop_size` | Optional GOP size, passed as FFmpeg `-g`. |
+| `encoding.no_scenecut` | Disable adaptive scene-cut I-frames for NVENC. |
+| `encoding.strict_gop` | Minimize GOP-to-GOP variation for NVENC. |
 | `encoding.pixel_format` | Output pixel format, usually `yuv420p`. |
 | `encoding.copy_audio` | Whether to copy audio from the input video. |
 | `encoding.output_mode` | `composited` writes source media with overlays burned in; videos become `<stem>_output.mp4` and still images become `<stem>_output.jpg` or `.png`. `transparent_overlay` writes overlays only; videos become alpha-channel QuickTime Animation `<stem>_overlay.mov` and still images become alpha-channel `<stem>_overlay.png`. |
@@ -113,6 +120,12 @@ Top-level sections:
 When `layout` is set, overlays are rendered at the reference size and each completed overlay layer is scaled during FFmpeg composition. If `layout` is omitted, overlay coordinates and sizes are used as fixed pixels for backward compatibility.
 
 Still images use EXIF `DateTimeOriginal`, `DateTimeDigitized`, or `DateTime` as the shot time. EXIF offset tags are honored when present; otherwise EXIF timestamps are interpreted in the application display timezone. If no EXIF timestamp is available, the file modification time is used.
+
+When `still_images.resize_mode` is `contain`, still images are scaled uniformly
+and centered on `still_images.canvas_resolution` before overlays are composed.
+The entire source image remains visible, and unused space is filled with
+`still_images.background_color`. Using the same canvas and layout reference
+resolution keeps still-image overlay positions identical to the video layout.
 
 `contact_sheet` samples each MP4 at `interval_seconds` and adds each JPEG/PNG
 once. Samples are sorted by corrected capture time and rendered without FIT
@@ -646,11 +659,18 @@ python fit2mp4.py /path/to/media_dir /path/to/activity.fit /path/to/output_dir
 | `still_exports` | 動画からの静止画書き出し設定。`enabled`, `positions`, `interval_seconds` を指定できます。 |
 | `contact_sheet` | 元動画・静止画の時系列コンタクトシートとJSON。相対 `output_dir` は `input.output_dir` の下として解決します。 |
 | `layout.reference_resolution` | overlay配置の基準にするメディアサイズ。例: `[3840, 2160]`。 |
+| `still_images.canvas_resolution` | 静止画入力の出力canvasサイズ。 |
+| `still_images.resize_mode` | `original` は元サイズを維持し、`contain` は静止画全体を切り取らずcanvas内へ収めます。 |
+| `still_images.background_color` | `contain` で生じる余白を埋めるRGB背景色。 |
 | `layout.scale_mode` | 配置のスケール方式。`fit` は入力メディアの解像度に合わせてoverlayを等倍率で拡大縮小します。 |
 | `encoding.codec` | 最終出力に使うFFmpeg動画codec。 |
 | `encoding.cq` | NVENCなどCQ系codec向けの品質値。 |
 | `encoding.crf` | x264/x265などCRF系codec向けの品質値。 |
 | `encoding.preset` | FFmpeg encoder preset。 |
+| `encoding.bframes` | Bフレーム最大数。省略時はencoderの既定値、`0`でBフレームを無効化します。 |
+| `encoding.gop_size` | GOPサイズ。FFmpegの`-g`へ渡します。 |
+| `encoding.no_scenecut` | NVENCのscene cutによるIフレーム自動挿入を無効化します。 |
+| `encoding.strict_gop` | NVENCのGOP間の変動を最小化します。 |
 | `encoding.pixel_format` | 出力pixel format。通常は `yuv420p`。 |
 | `encoding.copy_audio` | 入力動画の音声を最終出力へコピーするか。 |
 | `encoding.output_mode` | `composited` は入力メディアにoverlayを焼き込みます。動画は `<stem>_output.mp4`、静止画は `<stem>_output.jpg` または `.png` です。`transparent_overlay` はoverlayだけを出力します。動画はアルファチャンネル付きQuickTime Animationの `<stem>_overlay.mov`、静止画はアルファチャンネル付き `<stem>_overlay.png` です。 |
@@ -663,6 +683,12 @@ python fit2mp4.py /path/to/media_dir /path/to/activity.fit /path/to/output_dir
 `layout` を指定した場合、overlayは基準サイズで描画され、完成したoverlayレイヤー全体をFFmpeg合成時に拡大縮小します。`layout` を省略した場合は、後方互換のため座標とサイズを固定pxとして扱います。
 
 静止画の時刻はEXIFの `DateTimeOriginal`、`DateTimeDigitized`、`DateTime` の順に使います。EXIFの時差タグがあればそれを反映し、なければアプリケーションの表示タイムゾーンとして解釈します。EXIF時刻がない場合はファイル更新時刻を使います。
+
+`still_images.resize_mode` を `contain` にすると、静止画はoverlay合成前に
+縦横比を保ったまま `still_images.canvas_resolution` 内へ中央配置されます。
+元画像は切り取られず、余白は `still_images.background_color` で埋められます。
+canvasと `layout.reference_resolution` を同じサイズにすると、動画と静止画の
+overlay位置が一致します。
 
 `contact_sheet` は各MP4を `interval_seconds` ごとに抽出し、JPEG/PNGは
 1ファイルにつき1回追加します。補正後の撮影時刻順に並べ、FIT overlayを

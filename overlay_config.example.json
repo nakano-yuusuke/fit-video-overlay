@@ -52,11 +52,20 @@
         "reference_resolution": [3840, 2160],
         "scale_mode": "fit"
     },
+    "still_images": {
+        "canvas_resolution": [3840, 2160],
+        "resize_mode": "contain",
+        "background_color": [0, 0, 0]
+    },
     "encoding": {
         "codec": "libx264",
         "cq": 20,
         "crf": 18,
         "preset": "medium",
+        "bframes": null,
+        "gop_size": null,
+        "no_scenecut": false,
+        "strict_gop": false,
         "pixel_format": "yuv420p",
         "copy_audio": true,
         "output_mode": "composited",
