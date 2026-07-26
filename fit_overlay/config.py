@@ -92,6 +92,19 @@ class TextColumnOverlayConfig(OverlayConfig):
 
 
 @dataclass(frozen=True)
+class GraphSeriesConfig:
+    source: str = "fit"
+    x_column: str | None = None
+    x_multiplier: float = 1.0
+    column: str = ""
+    multiplier: float = 1.0
+    line_color: Color = (80, 220, 255)
+    line_thickness: int = 3
+    line_draw_style: str = "auto"
+    reveal: str = "all"
+
+
+@dataclass(frozen=True)
 class GraphOverlayConfig(OverlayConfig):
     style_path: Path | None = None
     engine: str = "opencv"
@@ -130,6 +143,9 @@ class GraphOverlayConfig(OverlayConfig):
     current_marker_thickness: int = 2
     current_marker_radius: int = 5
     show_future_series: bool = True
+    series: tuple[GraphSeriesConfig, ...] = ()
+    x_domain: str = "data"
+    gpx_path: Path | None = None
     show_future_poi: bool = True
     show_value: bool = True
     value_position: tuple[int, int] = (12, 34)
@@ -1035,6 +1051,9 @@ def _parse_overlay(
                 "current_marker_thickness",
                 "current_marker_radius",
                 "show_future_series",
+                "series",
+                "x_domain",
+                "gpx_path",
                 "show_future_poi",
                 "show_value",
                 "value_text",
@@ -1078,6 +1097,19 @@ def _parse_overlay(
             raise ValueError(
                 "graphのaxes_layer_orderはfrontまたはbehindを指定してください。"
             )
+        x_domain = str(raw.get("x_domain", "data"))
+        if x_domain not in {"data", "route"}:
+            raise ValueError("graphのx_domainはdataまたはrouteを指定してください。")
+        gpx_path = _resolve_optional_path(
+            base_dir,
+            raw.get("gpx_path"),
+            resources.route_gpx_path,
+        )
+        if x_domain == "route" and gpx_path is None:
+            raise ValueError(
+                f"overlays.{common['id']}.x_domain=routeにはgpx_pathまたは"
+                "resources.route_gpx_pathが必要です。"
+            )
         background = _parse_overlay_background(
             raw,
             base_dir,
@@ -1092,6 +1124,36 @@ def _parse_overlay(
                 f"overlays.{common['id']}.y_minはy_maxより小さくしてください。"
             )
         window_seconds = raw.get("window_seconds", 300.0)
+        series = _parse_graph_series(
+            raw.get("series"),
+            raw,
+            overlay_id=common["id"],
+        )
+        if series and engine != "matplotlib_strip":
+            raise ValueError(
+                f"overlays.{common['id']}.seriesはengine=matplotlib_stripでのみ使用できます。"
+            )
+        if any(item.source == "gpx" for item in series) and gpx_path is None:
+            raise ValueError(
+                f"overlays.{common['id']}のsource=gpxにはgpx_pathまたは"
+                "resources.route_gpx_pathが必要です。"
+            )
+        primary_series = next(
+            (item for item in series if item.source == "fit"),
+            series[0] if series else None,
+        )
+        column_value = raw.get("column")
+        if column_value is None:
+            column_value = (
+                primary_series.column
+                if primary_series is not None
+                else _required(raw, "column")
+            )
+        x_column_value = raw.get("x_column")
+        if x_column_value is None and primary_series is not None:
+            x_column_value = primary_series.x_column
+        column = str(column_value)
+        x_column = None if x_column_value is None else str(x_column_value)
         return GraphOverlayConfig(
             **common,
             style_path=style_path,
@@ -1100,18 +1162,14 @@ def _parse_overlay(
             line_draw_style=line_draw_style,
             viewport_mode=viewport_mode,
             follow_anchor_ratio=follow_anchor_ratio,
-            x_column=(
-                None
-                if raw.get("x_column") is None
-                else str(raw.get("x_column"))
-            ),
+            x_column=x_column,
             x_multiplier=float(raw.get("x_multiplier", 1.0)),
             x_value_format=(
                 None
                 if raw.get("x_value_format") is None
                 else str(raw.get("x_value_format"))
             ),
-            column=str(_required(raw, "column")),
+            column=column,
             multiplier=float(raw.get("multiplier", 1.0)),
             value_format=str(raw.get("value_format", "{value:.1f}")),
             window_seconds=(
@@ -1187,6 +1245,9 @@ def _parse_overlay(
                 f"overlays.{common['id']}.current_marker_radius",
             ),
             show_future_series=bool(raw.get("show_future_series", True)),
+            series=series,
+            x_domain=x_domain,
+            gpx_path=gpx_path,
             show_future_poi=bool(raw.get("show_future_poi", True)),
             show_value=bool(raw.get("show_value", True)),
             value_position=value_text.position,
@@ -2233,6 +2294,22 @@ def _validate_feature_dependencies(
             references = {overlay.column}
             if isinstance(overlay, GraphOverlayConfig) and overlay.x_column is not None:
                 references.add(overlay.x_column)
+            if isinstance(overlay, GraphOverlayConfig) and overlay.series:
+                fit_series_references: set[str] = set()
+                gpx_series_references: set[str] = set()
+                for series in overlay.series:
+                    target = (
+                        fit_series_references
+                        if series.source == "fit"
+                        else gpx_series_references
+                    )
+                    target.add(series.column)
+                    if series.x_column is not None:
+                        target.add(series.x_column)
+                references.update(fit_series_references)
+                references.difference_update(
+                    gpx_series_references.difference(fit_series_references)
+                )
             if (
                 references.intersection(next_poi_distance_columns)
                 and not next_poi.enabled
@@ -2276,6 +2353,106 @@ def _validate_feature_dependencies(
                     f"overlay {overlay.id} は route_altitude_m を参照していますが、"
                     "features.route_progress.add_route_altitude が有効ではありません。"
                 )
+
+
+def _parse_graph_series(
+    raw: Any,
+    overlay_raw: dict[str, Any],
+    *,
+    overlay_id: str,
+) -> tuple[GraphSeriesConfig, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"overlays.{overlay_id}.seriesは配列で指定してください。")
+    if not raw:
+        raise ValueError(f"overlays.{overlay_id}.seriesは空にできません。")
+    result: list[GraphSeriesConfig] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"overlays.{overlay_id}.series[{index}]はオブジェクトで指定してください。"
+            )
+        unknown = set(item).difference(
+            {
+                "source",
+                "x_column",
+                "x_multiplier",
+                "column",
+                "multiplier",
+                "line_color",
+                "line_thickness",
+                "line_draw_style",
+                "reveal",
+            }
+        )
+        if unknown:
+            raise ValueError(
+                f"overlays.{overlay_id}.series[{index}]に未対応の設定があります: "
+                f"{sorted(unknown)}"
+            )
+        source = str(item.get("source", "fit"))
+        if source not in {"fit", "gpx"}:
+            raise ValueError(
+                f"overlays.{overlay_id}.series[{index}].sourceはfitまたはgpxを指定してください。"
+            )
+        line_draw_style = str(
+            item.get(
+                "line_draw_style",
+                overlay_raw.get("line_draw_style", "auto"),
+            )
+        )
+        if line_draw_style not in {"auto", "linear", "steps-post"}:
+            raise ValueError(
+                f"overlays.{overlay_id}.series[{index}].line_draw_styleは"
+                "auto、linear、steps-postを指定してください。"
+            )
+        default_reveal = (
+            "all" if bool(overlay_raw.get("show_future_series", True)) else "past"
+        )
+        reveal = str(item.get("reveal", default_reveal))
+        if reveal not in {"all", "past"}:
+            raise ValueError(
+                f"overlays.{overlay_id}.series[{index}].revealはallまたはpastを指定してください。"
+            )
+        x_column_value = item.get("x_column", overlay_raw.get("x_column"))
+        column_value = item.get("column", overlay_raw.get("column"))
+        if column_value is None:
+            raise ValueError(
+                f"overlays.{overlay_id}.series[{index}].columnを指定してください。"
+            )
+        result.append(
+            GraphSeriesConfig(
+                source=source,
+                x_column=None if x_column_value is None else str(x_column_value),
+                x_multiplier=float(
+                    item.get(
+                        "x_multiplier",
+                        overlay_raw.get("x_multiplier", 1.0),
+                    )
+                ),
+                column=str(column_value),
+                multiplier=float(
+                    item.get("multiplier", overlay_raw.get("multiplier", 1.0))
+                ),
+                line_color=_color(
+                    item.get(
+                        "line_color",
+                        overlay_raw.get("line_color", [80, 220, 255]),
+                    )
+                ),
+                line_thickness=_positive_int(
+                    item.get(
+                        "line_thickness",
+                        overlay_raw.get("line_thickness", 3),
+                    ),
+                    f"overlays.{overlay_id}.series[{index}].line_thickness",
+                ),
+                line_draw_style=line_draw_style,
+                reveal=reveal,
+            )
+        )
+    return tuple(result)
 
 
 def _parse_graph_value_text(

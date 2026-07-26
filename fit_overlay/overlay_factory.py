@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from .config import (
     GraphOverlayConfig,
+    GraphSeriesConfig,
     MapOverlayConfig,
     MetricOverlayConfig,
     OverlayDefinition,
@@ -15,12 +18,14 @@ from .config import (
 )
 from .frames import (
     FrameMaker,
+    GraphSeries,
     GraphFrameMaker,
     MatplotlibStripGraphFrameMaker,
     MetricFrameMaker,
     TextColumnFrameMaker,
     TimeFrameMaker,
 )
+from .gpx_route import GpxRoute
 from .map_frame import MapStaticFrameMaker
 from .poi import PointOfInterest
 from .route_margin import format_margin_seconds
@@ -36,6 +41,7 @@ class OverlayFactory:
     ) -> None:
         self.points_of_interest = points_of_interest
         self.route_progress_column = route_progress_column
+        self._route_cache: dict[Path, GpxRoute] = {}
 
     def create(
         self,
@@ -153,6 +159,8 @@ class OverlayFactory:
                 "style_path": config.style_path,
                 "strip_pixels_per_second": config.strip_pixels_per_second,
                 "matplotlib_dpi": config.matplotlib_dpi,
+                "graph_series": self._graph_series(config, data),
+                "x_domain": self._graph_x_domain(config),
             }
         return graph_class(
             config.refresh_rate_hz,
@@ -211,6 +219,76 @@ class OverlayFactory:
             points_of_interest=self.points_of_interest,
             **kwargs,
         )
+
+    def _graph_series(
+        self,
+        config: GraphOverlayConfig,
+        data: pd.DataFrame,
+    ) -> tuple[GraphSeries, ...]:
+        if not config.series:
+            return ()
+        return tuple(
+            self._graph_series_item(item, config, data)
+            for item in config.series
+        )
+
+    def _graph_series_item(
+        self,
+        item: GraphSeriesConfig,
+        config: GraphOverlayConfig,
+        data: pd.DataFrame,
+    ) -> GraphSeries:
+        if item.source == "gpx":
+            route = self._route(config)
+            if route.elevations is None:
+                raise ValueError(
+                    f"overlay {config.id} はGPX高度を参照していますが、GPXに<ele>がありません。"
+                )
+            return GraphSeries(
+                source=item.source,
+                column=item.column,
+                x_column=item.x_column,
+                multiplier=item.multiplier,
+                x_multiplier=item.x_multiplier,
+                line_color=item.line_color,
+                line_thickness=item.line_thickness,
+                line_draw_style=item.line_draw_style,
+                reveal=item.reveal,
+                x_values=route.cumulative_distance,
+                y_values=route.elevations,
+            )
+        return GraphSeries(
+            source=item.source,
+            column=item.column,
+            x_column=item.x_column,
+            multiplier=item.multiplier,
+            x_multiplier=item.x_multiplier,
+            line_color=item.line_color,
+            line_thickness=item.line_thickness,
+            line_draw_style=item.line_draw_style,
+            reveal=item.reveal,
+            data=data,
+        )
+
+    def _graph_x_domain(
+        self,
+        config: GraphOverlayConfig,
+    ) -> tuple[float, float] | None:
+        if config.x_domain != "route":
+            return None
+        route = self._route(config)
+        return 0.0, route.total_distance_m * config.x_multiplier
+
+    def _route(self, config: GraphOverlayConfig) -> GpxRoute:
+        if config.gpx_path is None:
+            raise ValueError(
+                f"overlay {config.id} でGPXルートが必要ですがgpx_pathがありません。"
+            )
+        route = self._route_cache.get(config.gpx_path)
+        if route is None:
+            route = GpxRoute(config.gpx_path)
+            self._route_cache[config.gpx_path] = route
+        return route
 
     def _create_map(
         self,
