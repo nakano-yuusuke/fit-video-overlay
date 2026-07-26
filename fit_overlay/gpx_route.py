@@ -302,6 +302,16 @@ class RouteProgressMatcher:
                 continue
 
             x, y = self.route.to_xy(lon, lat)
+            if previous_progress is None:
+                distance_to_route_start = np.hypot(
+                    x - self.route.x[0],
+                    y - self.route.y[0],
+                )
+                if distance_to_route_start <= self.off_route_threshold_m:
+                    # 閉ループでは始点と終点がほぼ同じ座標になる。FITの先頭が
+                    # 終点へわずかに近くても、始点近傍からの走行は進捗0として
+                    # 探し始め、いきなり総距離へ飛ぶのを防ぐ。
+                    previous_progress = 0.0
             candidates = self.route.candidate_segments(
                 x,
                 y,
