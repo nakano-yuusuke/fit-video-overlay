@@ -154,6 +154,7 @@ class ContactSheetGenerationTest(unittest.TestCase):
             self.assertEqual(result.frame_count, 2)
             self.assertEqual(len(result.sheet_paths), 1)
             payload = json.loads(result.json_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["media"][0]["user_comment"], "")
             self.assertEqual(payload["frames"][0]["source"]["media_id"], "M0001")
             self.assertEqual(payload["frames"][0]["fit_match"]["status"], "out_of_range")
             self.assertEqual(payload["frames"][0]["data"], {})

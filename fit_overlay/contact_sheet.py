@@ -483,6 +483,7 @@ def _build_json(
             "filename": item.path.name,
             "width": item.width,
             "height": item.height,
+            "user_comment": "",
         }
         if item.media_type == "video":
             record.update(
