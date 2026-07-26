@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -23,6 +24,22 @@ from .text_draw import draw_text, font_size_from_cv_scale
 
 Formatter = Callable[[float], str]
 ColorSelector = Callable[[float], tuple[int, int, int]]
+
+
+@dataclass(frozen=True)
+class GraphSeries:
+    source: str
+    column: str
+    x_column: str | None
+    multiplier: float
+    x_multiplier: float
+    line_color: tuple[int, int, int]
+    line_thickness: int
+    line_draw_style: str
+    reveal: str
+    data: pd.DataFrame | None = None
+    x_values: np.ndarray | None = None
+    y_values: np.ndarray | None = None
 
 
 class FrameMaker(ABC):
@@ -73,7 +90,8 @@ class FrameMaker(ABC):
         if any(column not in self.data.columns for column in columns):
             return None
 
-        previous_index = self.data.index.searchsorted(
+        previous_index = self._searchsorted_timestamp(
+            self.data.index,
             frame_time,
             side="right",
         ) - 1
@@ -105,6 +123,22 @@ class FrameMaker(ABC):
         elapsed_seconds = (frame_time - previous_time).total_seconds()
         ratio = elapsed_seconds / gap_seconds
         return previous_values + (next_values - previous_values) * ratio
+
+    @staticmethod
+    def _searchsorted_timestamp(
+        index: pd.Index,
+        timestamp: pd.Timestamp,
+        *,
+        side: str,
+    ) -> int:
+        if isinstance(index, pd.DatetimeIndex):
+            return int(np.searchsorted(index.asi8, timestamp.value, side=side))
+        try:
+            return int(index.searchsorted(timestamp, side=side))
+        except ValueError:
+            values = index.to_numpy()
+            coerced = np.asarray([timestamp.to_datetime64()], dtype=values.dtype)[0]
+            return int(values.searchsorted(coerced, side=side))
 
     @abstractmethod
     def make_frame(self, seconds: float) -> np.ndarray:
@@ -719,14 +753,33 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
         style_path: Path | None = None,
         strip_pixels_per_second: float | None = None,
         matplotlib_dpi: int = 100,
+        graph_series: tuple[GraphSeries, ...] = (),
+        x_domain: tuple[float, float] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.style_path = style_path
         self.strip_pixels_per_second = strip_pixels_per_second
         self.matplotlib_dpi = matplotlib_dpi
+        self.graph_series = graph_series or (
+            GraphSeries(
+                source="fit",
+                column=self.column,
+                x_column=self.x_column,
+                multiplier=self.multiplier,
+                x_multiplier=self.x_multiplier,
+                line_color=self.line_color,
+                line_thickness=self.line_thickness,
+                line_draw_style=self.line_draw_style,
+                reveal="all" if self.show_future_series else "past",
+                data=self.data,
+            ),
+        )
+        self._explicit_x_domain = x_domain
         self._plot_bounds = self._plot_bounds_from_padding()
         self._strip: np.ndarray | None = None
+        self._full_strip: np.ndarray | None = None
+        self._past_strip: np.ndarray | None = None
         self._strip_start_time: pd.Timestamp | None = None
         self._strip_end_time: pd.Timestamp | None = None
         self._pixels_per_second: float = 1.0
@@ -756,14 +809,14 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
         axes_layer = self._current_axes_layer(frame_time)
         if axes_layer is not None and self.axes_layer_order == "behind":
             self._blend_axes_layer(frame, axes_layer)
-        if self._strip is not None and self.viewport_mode == "overview":
+        if self.viewport_mode == "overview":
             strip = self._overview_strip_until(frame_time)
             if strip is not None:
                 self._blend_rgba(
                     frame[plot_top:plot_bottom, plot_left:plot_right],
                     strip,
                 )
-        elif self._strip is not None:
+        else:
             crop = self._crop_strip(frame_time)
             if crop is not None:
                 self._blend_rgba(
@@ -873,25 +926,66 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
             self.show_axes,
             self.axes_layer_order,
             self.show_x_axis_labels,
+            tuple(
+                (
+                    item.source,
+                    item.column,
+                    item.x_column,
+                    item.multiplier,
+                    item.x_multiplier,
+                    item.line_color,
+                    item.line_thickness,
+                    item.line_draw_style,
+                    item.reveal,
+                    id(item.data),
+                    None if item.x_values is None else len(item.x_values),
+                    None if item.y_values is None else len(item.y_values),
+                )
+                for item in self.graph_series
+            ),
+            self._explicit_x_domain,
         )
         if self._strip_cache_key == cache_key:
             return
-        series = self._strip_series()
-        if series.empty:
-            self._strip = np.full(
+        rendered_series = self._strip_series_collection()
+        if not rendered_series:
+            empty = np.full(
                 (plot_height, strip_width, 4),
                 (0, 0, 0, 0),
                 dtype=np.uint8,
             )
+            self._full_strip = empty
+            self._past_strip = empty.copy()
+            self._strip = empty
             self._axes_layer = self._render_axes_layer(0.0, 1.0)
             self._strip_cache_key = cache_key
             return
-        y_min, y_max = self._value_range(series)
+        y_min, y_max = self._value_range_for_series(rendered_series)
         if y_min == y_max:
             y_min -= 1.0
             y_max += 1.0
         self._y_range = (y_min, y_max)
-        self._strip = self._render_strip(series, strip_width, plot_height, y_min, y_max)
+        full_series = [
+            item for item in rendered_series if item[0].reveal == "all"
+        ]
+        past_series = [
+            item for item in rendered_series if item[0].reveal == "past"
+        ]
+        self._full_strip = self._render_strip(
+            full_series,
+            strip_width,
+            plot_height,
+            y_min,
+            y_max,
+        )
+        self._past_strip = self._render_strip(
+            past_series,
+            strip_width,
+            plot_height,
+            y_min,
+            y_max,
+        )
+        self._strip = self._merge_strips(self._full_strip, self._past_strip)
         self._axes_layer = (
             None
             if self._uses_dynamic_follow_x_axis()
@@ -935,12 +1029,76 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
             self._strip_end_time,
         )
 
+    def _strip_series_collection(
+        self,
+    ) -> list[tuple[GraphSeries, np.ndarray, np.ndarray]]:
+        rendered: list[tuple[GraphSeries, np.ndarray, np.ndarray]] = []
+        for item in self.graph_series:
+            if item.source == "gpx":
+                if item.x_values is None or item.y_values is None:
+                    continue
+                x_values = item.x_values.astype(float) * item.x_multiplier
+                y_values = item.y_values.astype(float) * item.multiplier
+            else:
+                sampled = self._sample_graph_series(
+                    item,
+                    self._strip_start_time,
+                    self._strip_end_time,
+                )
+                if sampled.empty:
+                    continue
+                x_values = np.asarray(
+                    self._strip_x_values_for_series(sampled.index, item),
+                    dtype=float,
+                )
+                y_values = sampled.to_numpy(dtype=float)
+            valid = np.isfinite(x_values) & np.isfinite(y_values)
+            if not np.any(valid):
+                continue
+            x_values = x_values[valid]
+            y_values = y_values[valid]
+            if self.x_column is not None or item.x_column is not None:
+                x_values = np.asarray(
+                    [self._x_value_to_strip_x(float(value)) for value in x_values],
+                    dtype=float,
+                )
+            elif item.source == "gpx":
+                x_values = np.asarray(
+                    [self._x_value_to_strip_x(float(value)) for value in x_values],
+                    dtype=float,
+                )
+            rendered.append((item, x_values, y_values))
+        return rendered
+
     def _sample_series(
         self,
         start_time: pd.Timestamp,
         end_time: pd.Timestamp,
     ) -> pd.Series:
-        if end_time < start_time:
+        legacy = GraphSeries(
+            source="fit",
+            column=self.column,
+            x_column=self.x_column,
+            multiplier=self.multiplier,
+            x_multiplier=self.x_multiplier,
+            line_color=self.line_color,
+            line_thickness=self.line_thickness,
+            line_draw_style=self.line_draw_style,
+            reveal="all" if self.show_future_series else "past",
+            data=self.data,
+        )
+        return self._sample_graph_series(legacy, start_time, end_time)
+
+    def _sample_graph_series(
+        self,
+        series: GraphSeries,
+        start_time: pd.Timestamp | None,
+        end_time: pd.Timestamp | None,
+    ) -> pd.Series:
+        if start_time is None or end_time is None or end_time < start_time:
+            return pd.Series(dtype=float)
+        data = series.data if series.data is not None else self.data
+        if data is None or data.empty or series.column not in data.columns:
             return pd.Series(dtype=float)
         sample_seconds = (
             self.sample_interval_seconds
@@ -958,26 +1116,81 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
         values: list[float] = []
         valid_timestamps: list[pd.Timestamp] = []
         for timestamp in timestamps:
-            row = self.values_at(
+            row = self._values_at_data(
+                data,
                 timestamp,
-                [self.column],
+                [series.column],
                 interpolation=self.interpolation,
                 max_interpolation_gap_seconds=self.max_interpolation_gap_seconds,
             )
-            if row is None or pd.isna(row[self.column]):
+            if row is None or pd.isna(row[series.column]):
                 continue
-            values.append(float(row[self.column]) * self.multiplier)
+            values.append(float(row[series.column]) * series.multiplier)
             valid_timestamps.append(timestamp)
         return pd.Series(values, index=valid_timestamps, dtype=float)
 
+    def _values_at_data(
+        self,
+        data: pd.DataFrame,
+        frame_time: pd.Timestamp,
+        columns: list[str],
+        *,
+        interpolation: str,
+        max_interpolation_gap_seconds: float,
+    ) -> pd.Series | None:
+        if any(column not in data.columns for column in columns):
+            return None
+        previous_index = self._searchsorted_timestamp(
+            data.index,
+            frame_time,
+            side="right",
+        ) - 1
+        if previous_index < 0:
+            return None
+        previous_values = data.iloc[previous_index][columns]
+        if (
+            interpolation != "linear"
+            or previous_index >= len(data) - 1
+            or data.index[previous_index] == frame_time
+        ):
+            return previous_values
+        next_index = previous_index + 1
+        previous_time = data.index[previous_index]
+        next_time = data.index[next_index]
+        gap_seconds = (next_time - previous_time).total_seconds()
+        if gap_seconds <= 0 or gap_seconds > max_interpolation_gap_seconds:
+            return previous_values
+        next_values = data.iloc[next_index][columns]
+        if previous_values.isna().any() or next_values.isna().any():
+            return previous_values
+        elapsed_seconds = (frame_time - previous_time).total_seconds()
+        ratio = elapsed_seconds / gap_seconds
+        return previous_values + (next_values - previous_values) * ratio
+
+    def _value_range_for_series(
+        self,
+        series_items: list[tuple[GraphSeries, np.ndarray, np.ndarray]],
+    ) -> tuple[float, float]:
+        y_values = np.concatenate([item[2] for item in series_items])
+        series = pd.Series(y_values[np.isfinite(y_values)], dtype=float)
+        if series.empty:
+            return 0.0, 1.0
+        return self._value_range(series)
+
     def _render_strip(
         self,
-        series: pd.Series,
+        series_items: list[tuple[GraphSeries, np.ndarray, np.ndarray]],
         strip_width: int,
         plot_height: int,
         y_min: float,
         y_max: float,
     ) -> np.ndarray:
+        if not series_items:
+            return np.full(
+                (plot_height, strip_width, 4),
+                (0, 0, 0, 0),
+                dtype=np.uint8,
+            )
         style_context = (
             plt.style.context(str(self.style_path))
             if self.style_path is not None
@@ -999,12 +1212,14 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
             axes.set_ylim(y_min, y_max)
             axes.patch.set_alpha(0.0)
             figure.patch.set_alpha(0.0)
-            x_values = self._strip_x_values(series.index)
-            axes.plot(
-                x_values,
-                series.to_numpy(dtype=float),
-                drawstyle=self._matplotlib_drawstyle(),
-            )
+            for series, x_values, y_values in series_items:
+                axes.plot(
+                    x_values,
+                    y_values,
+                    color=tuple(channel / 255.0 for channel in series.line_color),
+                    linewidth=series.line_thickness,
+                    drawstyle=self._matplotlib_drawstyle_for(series),
+                )
             canvas.draw()
             rgba = np.asarray(canvas.buffer_rgba())
         rendered = rgba.copy()
@@ -1017,42 +1232,79 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
         return rendered
 
     def _matplotlib_drawstyle(self) -> str:
-        if self.line_draw_style == "linear":
+        legacy = GraphSeries(
+            source="fit",
+            column=self.column,
+            x_column=self.x_column,
+            multiplier=self.multiplier,
+            x_multiplier=self.x_multiplier,
+            line_color=self.line_color,
+            line_thickness=self.line_thickness,
+            line_draw_style=self.line_draw_style,
+            reveal="all" if self.show_future_series else "past",
+            data=self.data,
+        )
+        return self._matplotlib_drawstyle_for(legacy)
+
+    def _matplotlib_drawstyle_for(self, series: GraphSeries) -> str:
+        if series.line_draw_style == "linear":
             return "default"
-        if self.line_draw_style == "steps-post":
+        if series.line_draw_style == "steps-post":
             return "steps-post"
         return "steps-post" if self.interpolation == "previous" else "default"
 
     def _crop_strip(self, frame_time: pd.Timestamp) -> np.ndarray | None:
-        if self._strip is None or self._strip_start_time is None:
+        if self._strip_start_time is None:
+            return None
+        strip = self._merge_strips(
+            self._full_strip,
+            self._past_strip_until(frame_time),
+        )
+        if strip is None:
             return None
         plot_left, _, plot_right, _ = self._plot_bounds
         plot_width = plot_right - plot_left
         anchor_x = self._frame_strip_x(frame_time)
         left_x = int(round(anchor_x - plot_width * self.follow_anchor_ratio))
         output = np.full(
-            (self._strip.shape[0], plot_width, 4),
+            (strip.shape[0], plot_width, 4),
             (0, 0, 0, 0),
             dtype=np.uint8,
         )
         source_left = max(left_x, 0)
-        source_right = min(left_x + plot_width, self._strip.shape[1])
+        source_right = min(left_x + plot_width, strip.shape[1])
         if source_left >= source_right:
             return output
         dest_left = source_left - left_x
         dest_right = dest_left + (source_right - source_left)
-        output[:, dest_left:dest_right] = self._strip[:, source_left:source_right]
+        output[:, dest_left:dest_right] = strip[:, source_left:source_right]
         return output
 
     def _overview_strip_until(self, frame_time: pd.Timestamp) -> np.ndarray | None:
-        if self._strip is None:
+        return self._merge_strips(
+            self._full_strip,
+            self._past_strip_until(frame_time),
+        )
+
+    def _past_strip_until(self, frame_time: pd.Timestamp) -> np.ndarray | None:
+        if self._past_strip is None:
             return None
-        if self.show_future_series:
-            return self._strip
-        plot_width = self._strip.shape[1]
+        plot_width = self._past_strip.shape[1]
         current_x = min(max(self._frame_x(frame_time), 0), plot_width - 1)
-        output = np.full_like(self._strip, (0, 0, 0, 0))
-        output[:, : current_x + 1] = self._strip[:, : current_x + 1]
+        output = np.full_like(self._past_strip, (0, 0, 0, 0))
+        output[:, : current_x + 1] = self._past_strip[:, : current_x + 1]
+        return output
+
+    def _merge_strips(
+        self,
+        bottom: np.ndarray | None,
+        top: np.ndarray | None,
+    ) -> np.ndarray | None:
+        if bottom is None:
+            return None if top is None else top.copy()
+        output = bottom.copy()
+        if top is not None:
+            self._blend_rgba(output, top)
         return output
 
     def _time_to_strip_x(self, timestamp: pd.Timestamp) -> int:
@@ -1220,6 +1472,8 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
         return (self.data[self.x_column].dropna() * self.x_multiplier).astype(float)
 
     def _x_range(self) -> tuple[float, float]:
+        if self._explicit_x_domain is not None:
+            return self._explicit_x_domain
         x_series = self._x_series()
         if x_series is None or x_series.empty:
             return 0.0, self.window_seconds or 1.0
@@ -1230,6 +1484,8 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
         start_time: pd.Timestamp,
         end_time: pd.Timestamp,
     ) -> tuple[float, float]:
+        if self._explicit_x_domain is not None and self.viewport_mode == "overview":
+            return self._explicit_x_domain
         x_series = self._x_series()
         if x_series is None or x_series.empty:
             return 0.0, self.window_seconds or 1.0
@@ -1297,13 +1553,38 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
         return left_x, left_x + visible_span
 
     def _strip_x_values(self, index: pd.Index) -> list[float]:
+        legacy = GraphSeries(
+            source="fit",
+            column=self.column,
+            x_column=self.x_column,
+            multiplier=self.multiplier,
+            x_multiplier=self.x_multiplier,
+            line_color=self.line_color,
+            line_thickness=self.line_thickness,
+            line_draw_style=self.line_draw_style,
+            reveal="all" if self.show_future_series else "past",
+            data=self.data,
+        )
+        values = self._strip_x_values_for_series(index, legacy)
         if self.x_column is None:
+            return values
+        return [self._x_value_to_strip_x(float(value)) for value in values]
+
+    def _strip_x_values_for_series(
+        self,
+        index: pd.Index,
+        series: GraphSeries,
+    ) -> list[float]:
+        data = series.data if series.data is not None else self.data
+        if series.x_column is None:
             return [self._time_to_strip_x(timestamp) for timestamp in index]
-        x_series = self._x_series()
-        if x_series is None or x_series.empty:
+        if data is None or data.empty or series.x_column not in data.columns:
+            return [0.0 for _ in index]
+        x_series = (data[series.x_column].dropna() * series.x_multiplier).astype(float)
+        if x_series.empty:
             return [0.0 for _ in index]
         aligned = x_series.reindex(index, method="nearest")
-        return [self._x_value_to_strip_x(float(value)) for value in aligned]
+        return [float(value) for value in aligned]
 
     def _frame_x(self, frame_time: pd.Timestamp) -> int:
         if self.x_column is None:
