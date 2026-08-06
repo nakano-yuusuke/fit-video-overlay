@@ -13,6 +13,9 @@ from .poi import PointOfInterest
 from .text_draw import draw_centered_text
 
 
+_POI_LABEL_GAP_PX = 4
+
+
 def load_poi_icons(
     points_of_interest: tuple[PointOfInterest, ...],
     *,
@@ -48,7 +51,7 @@ def draw_poi_marker(
     icon = icons.get(poi.id)
     if icon is not None:
         overlay_rgba_center(image, icon, x, y)
-        return max(7, icon.shape[1] // 2 + 6)
+        return _icon_label_offset(icon)
 
     if poi.emoji:
         rendered = draw_centered_text(
@@ -67,6 +70,17 @@ def draw_poi_marker(
     cv2.circle(image, (x, y), 5, _draw_color(image, (0, 0, 0)), -1, cv2.LINE_AA)
     cv2.circle(image, (x, y), 4, _draw_color(image, color), -1, cv2.LINE_AA)
     return 7
+
+
+def _icon_label_offset(icon: np.ndarray) -> int:
+    """透明余白を除いたアイコン右端からラベル位置を決める。"""
+    alpha = icon[..., 3]
+    visible_columns = np.flatnonzero(np.any(alpha > 0, axis=0))
+    if visible_columns.size == 0:
+        return 7
+    visible_right = int(visible_columns[-1])
+    center = icon.shape[1] // 2
+    return max(7, visible_right - center + _POI_LABEL_GAP_PX)
 
 
 def _draw_color(image: np.ndarray, color: tuple[int, int, int]) -> tuple[int, ...]:

@@ -6,7 +6,7 @@ import hashlib
 import io
 import logging
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 from urllib.request import Request, urlopen
 
 import cartopy.io.img_tiles as cimgt
@@ -40,6 +40,12 @@ def _current_rss_mb() -> float | None:
 class CachedOsmTiles(cimgt.OSM):
     """OSMタイルをローカルへ保存し、同じ地図の再取得を避ける。"""
 
+    # Cartopyのデフォルトは1地図あたり多数の並列リクエストを送る。
+    # 動画も並列処理されるため、OSM側の一時的な拒否を避けるよう抑制する。
+    _MAX_THREADS = 2
+    _DOWNLOAD_ATTEMPTS = 4
+    _RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0)
+
     def __init__(self, cache_dir: Path) -> None:
         super().__init__()
         self.cache_dir = cache_dir
@@ -57,9 +63,7 @@ class CachedOsmTiles(cimgt.OSM):
             logger.debug("osm_tile_cache_miss tile=%s url=%s", tile, url)
             request = Request(url, headers={"User-Agent": "fit2mp4"})
             start = perf_counter()
-            with urlopen(request) as response:
-                image = Image.open(io.BytesIO(response.read()))
-                image.load()
+            image = self._download_image(request, tile=tile, url=url)
             logger.debug(
                 "osm_tile_downloaded tile=%s elapsed=%.2fs",
                 tile,
@@ -72,6 +76,33 @@ class CachedOsmTiles(cimgt.OSM):
 
         image = image.convert(self.desired_tile_form)
         return image, self.tileextent(tile), "lower"
+
+    def _download_image(self, request: Request, *, tile, url: str) -> Image.Image:
+        for attempt in range(1, self._DOWNLOAD_ATTEMPTS + 1):
+            try:
+                with urlopen(request, timeout=15) as response:
+                    image = Image.open(io.BytesIO(response.read()))
+                    image.load()
+                return image
+            except OSError as error:
+                if attempt >= self._DOWNLOAD_ATTEMPTS:
+                    raise RuntimeError(
+                        "OSMタイルを"
+                        f"{self._DOWNLOAD_ATTEMPTS}回取得できませんでした: "
+                        f"tile={tile} url={url}"
+                    ) from error
+                delay = self._RETRY_DELAYS_SECONDS[attempt - 1]
+                logger.warning(
+                    "osm_tile_download_retry tile=%s url=%s "
+                    "attempt=%d/%d delay=%.1fs error=%s",
+                    tile,
+                    url,
+                    attempt,
+                    self._DOWNLOAD_ATTEMPTS,
+                    delay,
+                    error,
+                )
+                sleep(delay)
 
 
 class StaticMapRenderer:
