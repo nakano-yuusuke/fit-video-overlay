@@ -299,6 +299,8 @@ class NextPoiFeatureConfig:
 class PointOfInterestSourceConfig:
     type: str
     gpx_path: Path
+    label_field: str = "name"
+    match_order: bool = False
     emoji: str = ""
     icon: Path | None = None
     icon_size: tuple[int, int] | None = None
@@ -1888,17 +1890,31 @@ def _parse_poi_sources(
         if not isinstance(item, dict):
             raise ValueError("points_of_interest.sourcesの各要素はオブジェクトです。")
         unknown = set(item).difference(
-            {"type", "gpx_path", "emoji", "icon", "icon_size"}
+            {
+                "type",
+                "gpx_path",
+                "label_field",
+                "match_order",
+                "emoji",
+                "icon",
+                "icon_size",
+            }
         )
         if unknown:
             raise ValueError(
                 "points_of_interest.sourcesに未対応の設定があります: "
                 f"{sorted(unknown)}"
-        )
+            )
         source_type = str(_required(item, "type"))
         if source_type != "gpx_wpt":
             raise ValueError(
                 "points_of_interest.sources.typeはgpx_wptを指定してください。"
+            )
+        label_field = str(item.get("label_field", "name"))
+        if label_field not in {"name", "desc", "cmt"}:
+            raise ValueError(
+                "points_of_interest.sources.label_fieldは"
+                "name、desc、cmtのいずれかを指定してください。"
             )
         source_gpx_path = (
             default_gpx_path
@@ -1913,6 +1929,8 @@ def _parse_poi_sources(
             PointOfInterestSourceConfig(
                 type=source_type,
                 gpx_path=source_gpx_path,
+                label_field=label_field,
+                match_order=bool(item.get("match_order", False)),
                 emoji=str(item.get("emoji", "")),
                 icon=(
                     None

@@ -17,6 +17,7 @@ from fit_overlay.config import (
     load_processor_config,
 )
 from fit_overlay.contact_sheet import generate_contact_sheet, video_sample_positions
+from fit_overlay.route_feature_profile import RouteFeatureProfile
 
 
 class ContactSheetConfigTest(unittest.TestCase):
@@ -106,6 +107,7 @@ class ContactSheetGenerationTest(unittest.TestCase):
                 {
                     "speed": [1.0, 2.0, 3.0],
                     "place_name": ["A", "B", "C"],
+                    "route_progress_m": [100.0, 1_500.0, 2_500.0],
                 },
                 index=pd.DatetimeIndex(
                     [
@@ -127,6 +129,11 @@ class ContactSheetGenerationTest(unittest.TestCase):
                 json_fields=(
                     ContactSheetJsonFieldConfig("speed", "speed_kmh", 3.6, 1),
                     ContactSheetJsonFieldConfig("place_name", "place_name"),
+                    ContactSheetJsonFieldConfig(
+                        "traffic_signal_count_per_km",
+                        "traffic_signal_count_per_km",
+                        decimals=0,
+                    ),
                     ContactSheetJsonFieldConfig("missing", "missing"),
                 ),
             )
@@ -137,10 +144,20 @@ class ContactSheetGenerationTest(unittest.TestCase):
                 overlays=(),
                 contact_sheet=contact_config,
             )
+            route_features = RouteFeatureProfile(
+                pd.DataFrame(
+                    {"traffic_signal_count_per_km": [2.0, 4.0, 4.0]},
+                    index=pd.Index(
+                        [0.0, 1_000.0, 3_000.0],
+                        name="route_distance_m",
+                    ),
+                )
+            )
 
             result = generate_contact_sheet(
                 processor_config,
                 data,
+                route_features=route_features,
                 read_video_raw_time=lambda path, info: pd.Timestamp(0, tz="UTC"),
                 read_video_time=lambda path, info: pd.Timestamp(0, tz="UTC"),
                 media_offset_for=lambda timestamp: 0.0,
@@ -160,6 +177,10 @@ class ContactSheetGenerationTest(unittest.TestCase):
             self.assertEqual(payload["frames"][0]["data"], {})
             self.assertEqual(payload["frames"][1]["data"]["speed_kmh"], 7.2)
             self.assertEqual(payload["frames"][1]["data"]["place_name"], "B")
+            self.assertEqual(
+                payload["frames"][1]["data"]["traffic_signal_count_per_km"],
+                4.0,
+            )
             self.assertNotIn("missing", payload["frames"][1]["data"])
             self.assertEqual(payload["frames"][1]["capture_gap_seconds"], 7)
 

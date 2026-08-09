@@ -29,6 +29,7 @@ from .gpx_route import GpxRoute
 from .map_frame import MapStaticFrameMaker
 from .poi import PointOfInterest
 from .route_margin import format_margin_seconds
+from .route_feature_profile import RouteFeatureProfile
 
 
 class OverlayFactory:
@@ -38,9 +39,13 @@ class OverlayFactory:
         self,
         points_of_interest: tuple[PointOfInterest, ...] = (),
         route_progress_column: str = "route_progress_m",
+        route_features: RouteFeatureProfile | None = None,
     ) -> None:
         self.points_of_interest = points_of_interest
         self.route_progress_column = route_progress_column
+        self.route_features = route_features or RouteFeatureProfile.empty(
+            route_progress_column
+        )
         self._route_cache: dict[Path, GpxRoute] = {}
 
     def create(
@@ -114,9 +119,10 @@ class OverlayFactory:
                 else config.negative_color
             )
 
+        resolved_data = self.route_features.attach_columns(data, [config.column])
         return MetricFrameMaker(
             config.refresh_rate_hz,
-            data,
+            resolved_data,
             config.background,
             config.column,
             formatter,
@@ -148,6 +154,11 @@ class OverlayFactory:
         config: GraphOverlayConfig,
         data: pd.DataFrame,
     ) -> FrameMaker:
+        series_columns = [item.column for item in config.series]
+        resolved_data = self.route_features.attach_columns(
+            data,
+            [config.column, *series_columns],
+        )
         graph_class = (
             MatplotlibStripGraphFrameMaker
             if config.engine == "matplotlib_strip"
@@ -159,12 +170,12 @@ class OverlayFactory:
                 "style_path": config.style_path,
                 "strip_pixels_per_second": config.strip_pixels_per_second,
                 "matplotlib_dpi": config.matplotlib_dpi,
-                "graph_series": self._graph_series(config, data),
+                "graph_series": self._graph_series(config, resolved_data),
                 "x_domain": self._graph_x_domain(config),
             }
         return graph_class(
             config.refresh_rate_hz,
-            data,
+            resolved_data,
             config.column,
             lambda value: self._format_numeric_value(config.value_format, value),
             width=config.width,
@@ -226,7 +237,24 @@ class OverlayFactory:
         data: pd.DataFrame,
     ) -> tuple[GraphSeries, ...]:
         if not config.series:
-            return ()
+            if not self.route_features.has_column(config.column):
+                return ()
+            values = self.route_features.series(config.column)
+            return (
+                GraphSeries(
+                    source="route_feature",
+                    column=config.column,
+                    x_column=config.x_column,
+                    multiplier=config.multiplier,
+                    x_multiplier=config.x_multiplier,
+                    line_color=config.line_color,
+                    line_thickness=config.line_thickness,
+                    line_draw_style=config.line_draw_style,
+                    reveal="all",
+                    x_values=values.index.to_numpy(dtype=float),
+                    y_values=values.to_numpy(dtype=float),
+                ),
+            )
         return tuple(
             self._graph_series_item(item, config, data)
             for item in config.series
@@ -274,6 +302,11 @@ class OverlayFactory:
         self,
         config: GraphOverlayConfig,
     ) -> tuple[float, float] | None:
+        if self.route_features.has_column(config.column):
+            return (
+                0.0,
+                self.route_features.total_distance_m * config.x_multiplier,
+            )
         if config.x_domain != "route":
             return None
         route = self._route(config)

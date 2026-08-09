@@ -18,6 +18,8 @@ class GpxWaypoint:
     lon: float
     elevation_m: float | None = None
     type: str | None = None
+    description: str | None = None
+    comment: str | None = None
 
 
 class GpxRoute:
@@ -124,6 +126,8 @@ class GpxRoute:
             name = ""
             waypoint_type: str | None = None
             elevation_m: float | None = None
+            description: str | None = None
+            comment: str | None = None
             for child in element:
                 if child.text is None:
                     continue
@@ -133,6 +137,10 @@ class GpxRoute:
                     waypoint_type = child.text.strip()
                 elif child.tag.endswith("ele"):
                     elevation_m = float(child.text)
+                elif child.tag.endswith("desc"):
+                    description = child.text.strip()
+                elif child.tag.endswith("cmt"):
+                    comment = child.text.strip()
             waypoints.append(
                 GpxWaypoint(
                     name=name,
@@ -140,6 +148,8 @@ class GpxRoute:
                     lon=float(element.attrib["lon"]),
                     elevation_m=elevation_m,
                     type=waypoint_type,
+                    description=description,
+                    comment=comment,
                 )
             )
             element.clear()

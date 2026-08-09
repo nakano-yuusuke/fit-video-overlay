@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -13,29 +14,55 @@ import pandas as pd
 
 from .config import TrafficSignalsFeatureConfig
 from .gpx_route import GpxRoute, RouteProgressMatcher
+from .route_feature_profile import RouteFeatureProfile
 
 
-def add_traffic_signal_counts(
+@dataclass(frozen=True)
+class TrafficSignalProfileResult:
+    profile: RouteFeatureProfile
+    route_progress: pd.Series | None = None
+
+
+def build_traffic_signal_profile(
     data: pd.DataFrame,
     config: TrafficSignalsFeatureConfig,
-) -> pd.DataFrame:
-    """FITデータへ1km区間ごとの信号数列を追加する。"""
+) -> TrafficSignalProfileResult:
+    """ルート全区間の距離バケットごとの信号数を作る。"""
     if not config.enabled:
-        return data
+        return TrafficSignalProfileResult(RouteFeatureProfile.empty())
 
     route = _route_from_config(data, config)
     signals = _load_or_fetch_signals(route, config)
     signal_progress = _match_signals_to_route(route, signals, config)
     bucket_counts = _count_by_bucket(signal_progress, config.bucket_distance_m)
     progress = _fit_progress_on_route(data, route, config)
-
-    result = data.copy()
-    if "route_progress_m" not in result.columns:
-        result["route_progress_m"] = progress
-    bucket_indices = np.floor(progress / config.bucket_distance_m).astype("Int64")
-    counts = bucket_indices.map(lambda index: bucket_counts.get(int(index), 0))
-    result[config.column] = counts.astype(float).ffill().fillna(0.0)
-    return result
+    bucket_starts = np.arange(
+        0.0,
+        route.total_distance_m,
+        config.bucket_distance_m,
+        dtype=float,
+    )
+    if bucket_starts.size == 0:
+        bucket_starts = np.asarray([0.0], dtype=float)
+    values = np.asarray(
+        [
+            bucket_counts.get(int(distance // config.bucket_distance_m), 0)
+            for distance in bucket_starts
+        ],
+        dtype=float,
+    )
+    if route.total_distance_m > bucket_starts[-1]:
+        bucket_starts = np.append(bucket_starts, route.total_distance_m)
+        values = np.append(values, values[-1])
+    profile_data = pd.DataFrame(
+        {config.column: values},
+        index=pd.Index(bucket_starts, name="route_distance_m"),
+    )
+    route_progress = None if "route_progress_m" in data.columns else progress
+    return TrafficSignalProfileResult(
+        RouteFeatureProfile(profile_data),
+        route_progress,
+    )
 
 
 def _route_from_config(
