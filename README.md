@@ -412,11 +412,12 @@ previous matched GPX progress the next FIT point may be matched.
 | `sources` | External POI sources. Currently supports `{"type": "gpx_wpt"}`. |
 | `items` | Manually defined POIs. Each item needs `id` and either `distance_m` or `lat`/`lon`. |
 
-GPX WPT POIs use the WPT `<name>` as the label. Overlays draw their own POI marker at the POI position. Marker priority is `icon` PNG, then `emoji`, then a fallback white circle. Manual POIs can set `label`, `emoji`, `icon`, `icon_size`, `distance_m`, or `lat`/`lon`; emoji rendering depends on the configured font. POIs are kept separately from the FIT-derived DataFrame and are passed directly to overlays.
+GPX WPT sources can set `label_field` to `name` (default), `desc`, or `cmt`; an empty selected field falls back to `<name>`. Set `match_order` to `true` when WPTs follow route order and repeated/parallel route sections must be disambiguated. When `features.next_poi` is enabled, its `sources`, `waypoint_types`, and `name_patterns` filters are shared by next-POI calculation and overlay POI rendering. Marker priority is `icon` PNG, then `emoji`, then a fallback white circle. Manual POIs can set `label`, `emoji`, `icon`, `icon_size`, `distance_m`, or `lat`/`lon`; emoji rendering depends on the configured font. POIs are kept separately from the FIT-derived DataFrame and are passed directly to overlays.
 
 ## Metric and Graph Columns
 
-`metric` and `graph` overlays can use any numeric column available in the FIT-derived DataFrame.
+`metric` and `graph` overlays can use numeric FIT-derived columns and registered
+route-feature columns.
 
 Examples:
 
@@ -441,7 +442,7 @@ Use `multiplier` for unit conversion:
 - Speed from m/s to km/h: `"multiplier": 3.6`
 - Distance from m to km: `"multiplier": 0.001`
 
-Common FIT columns include `speed`, `distance`, `altitude`, `heart_rate`, `cadence`, `power`, and `temperature`. Feature columns added during preprocessing, such as `route_progress_m`, `route_altitude_m`, `route_margin_seconds`, `grade_percent`, `route_grade_percent`, and `traffic_signal_count_per_km`, can also be displayed or graphed.
+Common FIT columns include `speed`, `distance`, `altitude`, `heart_rate`, `cadence`, `power`, and `temperature`. Derived FIT columns such as `route_progress_m`, `route_altitude_m`, `route_margin_seconds`, `grade_percent`, and `route_grade_percent` can also be displayed or graphed. Distance-indexed route features such as `traffic_signal_count_per_km` use the same `column` interface without being stored in the FIT DataFrame.
 
 Text feature columns, such as `place_name`, are displayed with a `text` overlay:
 
@@ -517,7 +518,8 @@ The implementation:
 - Caches the result under `cache/osm_features`.
 - Matches signals within `signal_match_threshold_m` of the route.
 - Counts raw signal nodes per `bucket_distance_m`; no clustering is applied yet.
-- Adds `traffic_signal_count_per_km` and `route_progress_m` to the overlay DataFrame.
+- Stores `traffic_signal_count_per_km` in a route-distance-indexed feature profile.
+- Uses FIT `route_progress_m` to resolve the current value for metrics and JSON output, while overview graphs draw the complete GPX route profile even when the FIT activity ends early.
 
 If an overlay references `traffic_signal_count_per_km` while `features.traffic_signals.enabled` is false, config loading fails with an explicit error.
 
@@ -975,11 +977,11 @@ GPS欠落後や動画間隔が長い箇所で進捗が復帰しない場合は
 | `sources` | 外部POIソース。現在は `{"type": "gpx_wpt"}` に対応。 |
 | `items` | 手動POI定義。各要素には `id` と、`distance_m` または `lat`/`lon` が必要です。 |
 
-GPX WPT由来POIはWPTの `<name>` をラベルにします。overlay側でPOI位置にマーカーを描きます。マーカーは `icon` PNG、`emoji`、白丸の優先順です。手動POIでは `label`, `emoji`, `icon`, `icon_size`, `distance_m`, `lat`/`lon` を指定できますが、絵文字表示は設定フォントに依存します。POIはFIT由来DataFrameには入れず、overlayへ別データとして渡します。
+GPX WPTソースは `label_field` に `name`（デフォルト）、`desc`、`cmt` を指定できます。選択したフィールドが空なら `<name>` へフォールバックします。WPTがルート順で、往復などの近接区間を識別する必要がある場合は `match_order` を `true` にします。`features.next_poi` が有効な場合、`sources`, `waypoint_types`, `name_patterns` の絞り込みは次POI計算とoverlayのPOI描画で共用します。マーカーは `icon` PNG、`emoji`、白丸の優先順です。手動POIでは `label`, `emoji`, `icon`, `icon_size`, `distance_m`, `lat`/`lon` を指定できますが、絵文字表示は設定フォントに依存します。POIはFIT由来DataFrameには入れず、overlayへ別データとして渡します。
 
 ## 数値表示とグラフの列指定
 
-`metric` と `graph` は、FIT由来DataFrameに含まれる任意の数値列を指定できます。
+`metric` と `graph` は、FIT由来の数値列と登録済みルート特徴量を指定できます。
 
 例:
 
@@ -1004,7 +1006,7 @@ GPX WPT由来POIはWPTの `<name>` をラベルにします。overlay側でPOI�
 - 速度を m/s から km/h にする: `"multiplier": 3.6`
 - 距離を m から km にする: `"multiplier": 0.001`
 
-よく使うFIT列には、`speed`, `distance`, `altitude`, `heart_rate`, `cadence`, `power`, `temperature` などがあります。前処理で追加した `route_progress_m`, `route_altitude_m`, `route_margin_seconds`, `grade_percent`, `route_grade_percent`, `traffic_signal_count_per_km` のような特徴量列も表示・グラフ化できます。
+よく使うFIT列には、`speed`, `distance`, `altitude`, `heart_rate`, `cadence`, `power`, `temperature` などがあります。派生FIT列の `route_progress_m`, `route_altitude_m`, `route_margin_seconds`, `grade_percent`, `route_grade_percent` も表示・グラフ化できます。距離インデックスのルート特徴量である `traffic_signal_count_per_km` はFIT DataFrameへ格納せず、同じ `column` インターフェースで参照できます。
 
 `place_name` のような文字列特徴量は `text` overlay で表示します。
 
@@ -1080,7 +1082,8 @@ POIをGPX予定ルート距離に直接合わせて表示するグラフでは�
 - 結果を `cache/osm_features` にキャッシュ
 - ルートから `signal_match_threshold_m` 以内の信号だけ採用
 - `bucket_distance_m` ごとに信号ノード数を単純集計
-- `traffic_signal_count_per_km` と `route_progress_m` をオーバーレイ用DataFrameに追加
+- `traffic_signal_count_per_km` をルート距離インデックスの特徴量プロファイルへ格納
+- 現在値とJSON出力はFITの `route_progress_m` から対応する値を引き、overviewグラフはFITが途中で終了してもGPX全区間のプロファイルを描画
 
 `features.traffic_signals.enabled` が無効な状態で `traffic_signal_count_per_km` を参照するoverlayがある場合、設定読み込み時に明示的なエラーになります。
 

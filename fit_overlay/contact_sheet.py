@@ -19,6 +19,7 @@ import pandas as pd
 from PIL import Image
 
 from .config import ContactSheetConfig, ContactSheetJsonFieldConfig, ProcessorConfig
+from .route_feature_profile import RouteFeatureProfile
 
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ def generate_contact_sheet(
     processor_config: ProcessorConfig,
     data: pd.DataFrame,
     *,
+    route_features: RouteFeatureProfile | None = None,
     read_video_raw_time: Callable[[Path, dict], pd.Timestamp],
     read_video_time: Callable[[Path, dict], pd.Timestamp],
     media_offset_for: Callable[[pd.Timestamp], float],
@@ -126,6 +128,11 @@ def generate_contact_sheet(
         read_video_frame=read_video_frame,
         read_image=read_image,
     )
+    if route_features is not None:
+        data = route_features.attach_columns(
+            data,
+            [field.source_column for field in config.json_fields],
+        )
     payload, debug_payload = _build_json(config, data, media, samples)
     json_path = config.output_dir / config.json_filename
     _write_json(json_path, payload)

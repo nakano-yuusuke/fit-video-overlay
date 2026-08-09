@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
+
 from .config import PointsOfInterestConfig
-from .gpx_route import GpxRoute
+from .gpx_route import GpxRoute, RouteProgressMatcher
 
 
 @dataclass(frozen=True)
@@ -53,12 +55,34 @@ def load_points_of_interest(
         route = route_for(source.gpx_path)
         assert route is not None
         waypoints = GpxRoute.load_waypoints(source.gpx_path)
-        for index, waypoint in enumerate(waypoints, start=1):
-            progress_m, _ = route.progress_for_position(
-                waypoint.lon,
-                waypoint.lat,
+        ordered_progress: list[float] | None = None
+        if source.match_order and waypoints:
+            waypoint_positions = pd.DataFrame(
+                {
+                    "position_long": [waypoint.lon for waypoint in waypoints],
+                    "position_lat": [waypoint.lat for waypoint in waypoints],
+                }
             )
-            label = waypoint.name or f"WPT{index}"
+            ordered_progress = RouteProgressMatcher(
+                route,
+                off_route_threshold_m=1000.0,
+                search_ahead_m=route.total_distance_m,
+                search_behind_m=0.0,
+            ).match(waypoint_positions).tolist()
+        for index, waypoint in enumerate(waypoints, start=1):
+            if ordered_progress is None:
+                progress_m, _ = route.progress_for_position(
+                    waypoint.lon,
+                    waypoint.lat,
+                )
+            else:
+                progress_m = ordered_progress[index - 1]
+            selected_label = {
+                "name": waypoint.name,
+                "desc": waypoint.description,
+                "cmt": waypoint.comment,
+            }[source.label_field]
+            label = selected_label or waypoint.name or f"WPT{index}"
             points.append(
                 PointOfInterest(
                     id=f"gpx_wpt_{source_index}_{index}",

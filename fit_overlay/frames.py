@@ -1034,9 +1034,7 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
     ) -> list[tuple[GraphSeries, np.ndarray, np.ndarray]]:
         rendered: list[tuple[GraphSeries, np.ndarray, np.ndarray]] = []
         for item in self.graph_series:
-            if item.source == "gpx":
-                if item.x_values is None or item.y_values is None:
-                    continue
+            if item.x_values is not None and item.y_values is not None:
                 x_values = item.x_values.astype(float) * item.x_multiplier
                 y_values = item.y_values.astype(float) * item.multiplier
             else:
@@ -1062,7 +1060,7 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
                     [self._x_value_to_strip_x(float(value)) for value in x_values],
                     dtype=float,
                 )
-            elif item.source == "gpx":
+            elif item.x_values is not None:
                 x_values = np.asarray(
                     [self._x_value_to_strip_x(float(value)) for value in x_values],
                     dtype=float,

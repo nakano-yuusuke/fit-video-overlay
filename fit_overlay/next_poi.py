@@ -26,7 +26,7 @@ def add_next_poi(
         )
 
     result = data.copy()
-    targets = _target_points(points_of_interest, config)
+    targets = filter_points_of_interest(points_of_interest, config)
     if not targets:
         result[config.name_column] = ""
         result[config.distance_column] = np.nan
@@ -112,10 +112,13 @@ def _labels_and_remaining(
     return names, remaining
 
 
-def _target_points(
+def filter_points_of_interest(
     points_of_interest: tuple[PointOfInterest, ...],
     config: NextPoiFeatureConfig,
-) -> list[PointOfInterest]:
+) -> tuple[PointOfInterest, ...]:
+    """next_poiとoverlay描画で共用するPOI絞り込み。"""
+    if not config.enabled:
+        return points_of_interest
     patterns = tuple(re.compile(pattern) for pattern in config.name_patterns)
     points = [
         poi
@@ -125,7 +128,7 @@ def _target_points(
         and _matches_waypoint_types(poi, config.waypoint_types)
         and _matches_name_patterns(poi, patterns)
     ]
-    return sorted(points, key=lambda poi: float(poi.distance_m))
+    return tuple(sorted(points, key=lambda poi: float(poi.distance_m)))
 
 
 def _matches_sources(

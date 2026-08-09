@@ -36,15 +36,16 @@ from .contact_sheet import ContactSheetResult, generate_contact_sheet
 from .data import load_fit_data, prepare_overlay_data
 from .frames import FrameMaker
 from .grade import add_grade
-from .next_poi import add_next_poi
+from .next_poi import add_next_poi, filter_points_of_interest
 from .overlay_factory import OverlayFactory
 from .place_names import add_place_names
 from .poi import PointOfInterest, load_points_of_interest
 from .route_features import add_route_progress
 from .route_margin import add_route_margin
+from .route_feature_profile import RouteFeatureProfile
 from .text_draw import draw_centered_text, draw_text, font_size_from_cv_scale
 from .time_utils import DISPLAY_TIMEZONE, to_utc_timestamp
-from .traffic_signals import add_traffic_signal_counts
+from .traffic_signals import build_traffic_signal_profile
 
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,7 @@ class _MediaTimeOffsetRule:
 class PreparedMediaData:
     data: pd.DataFrame
     points_of_interest: tuple[PointOfInterest, ...]
+    route_features: RouteFeatureProfile
 
 
 class OverlayVideoProcessor:
@@ -530,6 +532,7 @@ class OverlayVideoProcessor:
         self.overlay_factory = OverlayFactory(
             prepared.points_of_interest,
             route_progress_column=self.config.route_progress.progress_column,
+            route_features=prepared.route_features,
         )
         with _timed_step("create_overlay_specs"):
             overlays = self._create_overlay_specs(prepared.data)
@@ -883,8 +886,14 @@ class OverlayVideoProcessor:
             data = add_grade(data, self.config.grade)
         with _timed_step("add_route_margin"):
             data = add_route_margin(data, self.config.route_margin)
-        with _timed_step("add_traffic_signal_counts"):
-            data = add_traffic_signal_counts(data, self.config.traffic_signals)
+        with _timed_step("build_traffic_signal_profile"):
+            signal_result = build_traffic_signal_profile(
+                data,
+                self.config.traffic_signals,
+            )
+            if signal_result.route_progress is not None:
+                data = data.copy()
+                data["route_progress_m"] = signal_result.route_progress
         with _timed_step("add_place_names"):
             data = add_place_names(data, self.config.place_names)
         default_poi_gpx_path = (
@@ -895,14 +904,23 @@ class OverlayVideoProcessor:
             or self.config.place_names.gpx_path
         )
         with _timed_step("load_points_of_interest"):
-            points = load_points_of_interest(
+            loaded_points = load_points_of_interest(
                 self.config.points_of_interest,
                 default_gpx_path=default_poi_gpx_path,
             )
-        logger.info("points_of_interest count=%d", len(points))
+        points = filter_points_of_interest(loaded_points, self.config.next_poi)
+        logger.info(
+            "points_of_interest count=%d filtered_from=%d",
+            len(points),
+            len(loaded_points),
+        )
         with _timed_step("add_next_poi"):
             data = add_next_poi(data, self.config.next_poi, points)
-        return PreparedMediaData(data=data, points_of_interest=points)
+        return PreparedMediaData(
+            data=data,
+            points_of_interest=points,
+            route_features=signal_result.profile,
+        )
 
     def _generate_contact_sheet(
         self, prepared: PreparedMediaData
@@ -910,6 +928,7 @@ class OverlayVideoProcessor:
         return generate_contact_sheet(
             self.config,
             prepared.data,
+            route_features=prepared.route_features,
             read_video_raw_time=self._read_shot_time,
             read_video_time=self._read_video_shot_time,
             media_offset_for=self._media_time_offset_for,
@@ -943,6 +962,7 @@ class OverlayVideoProcessor:
         self.overlay_factory = OverlayFactory(
             prepared.points_of_interest,
             route_progress_column=self.config.route_progress.progress_column,
+            route_features=prepared.route_features,
         )
         with _timed_step("create_overlay_specs"):
             overlays = self._create_overlay_specs(prepared.data)
