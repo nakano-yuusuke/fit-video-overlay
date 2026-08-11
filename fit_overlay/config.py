@@ -344,7 +344,14 @@ class StillExportConfig:
 class StillImageConfig:
     """静止画入力をoverlay合成前に配置するcanvas設定。"""
 
-    canvas_resolution: tuple[int, int] | None = None
+    resize_mode: str = "original"
+    background_color: Color = (0, 0, 0)
+
+
+@dataclass(frozen=True)
+class VideoConfig:
+    """動画入力をoverlay合成前に配置するcanvas設定。"""
+
     resize_mode: str = "original"
     background_color: Color = (0, 0, 0)
 
@@ -414,6 +421,7 @@ class ProcessorConfig:
     layout: LayoutConfig = LayoutConfig()
     still_exports: StillExportConfig = StillExportConfig()
     still_images: StillImageConfig = StillImageConfig()
+    videos: VideoConfig = VideoConfig()
     contact_sheet: ContactSheetConfig = ContactSheetConfig()
     default_refresh_rate_hz: float = 59.94 / 4
     fit_time_offset_seconds: float = 0.0
@@ -453,6 +461,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
     layout = _parse_layout(raw.get("layout"))
     still_exports = _parse_still_exports(raw.get("still_exports"))
     still_images = _parse_still_images(raw.get("still_images"), layout)
+    videos = _parse_videos(raw.get("videos"), layout)
     styles = _parse_styles(raw.get("styles"), base_dir)
     overlay_items = raw.get("overlays", [])
     if not isinstance(overlay_items, list):
@@ -560,6 +569,7 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         layout=layout,
         still_exports=still_exports,
         still_images=still_images,
+        videos=videos,
         contact_sheet=contact_sheet,
         default_refresh_rate_hz=default_refresh_rate_hz,
         fit_time_offset_seconds=float(
@@ -1442,9 +1452,7 @@ def _parse_still_images(raw: Any, layout: LayoutConfig) -> StillImageConfig:
         return StillImageConfig()
     if not isinstance(raw, dict):
         raise ValueError("still_imagesはオブジェクトで指定してください。")
-    unknown = set(raw).difference(
-        {"canvas_resolution", "resize_mode", "background_color"}
-    )
+    unknown = set(raw).difference({"resize_mode", "background_color"})
     if unknown:
         raise ValueError(
             f"still_imagesに未対応の設定があります: {sorted(unknown)}"
@@ -1455,17 +1463,11 @@ def _parse_still_images(raw: Any, layout: LayoutConfig) -> StillImageConfig:
         raise ValueError(
             "still_images.resize_modeはoriginalまたはcontainを指定してください。"
         )
-    canvas_resolution = _optional_size(
-        raw.get("canvas_resolution"),
-        "still_images.canvas_resolution",
-    )
-    if resize_mode == "contain":
-        canvas_resolution = canvas_resolution or layout.reference_resolution
-        if canvas_resolution is None:
-            raise ValueError(
-                "still_images.resize_mode=containにはcanvas_resolutionまたは"
-                "layout.reference_resolutionが必要です。"
-            )
+    if resize_mode == "contain" and layout.reference_resolution is None:
+        raise ValueError(
+            "still_images.resize_mode=containには"
+            "layout.reference_resolutionが必要です。"
+        )
 
     background_raw = raw.get("background_color", [0, 0, 0])
     background_color = _pair_or_triplet(
@@ -1478,7 +1480,41 @@ def _parse_still_images(raw: Any, layout: LayoutConfig) -> StillImageConfig:
             "still_images.background_colorは0から255の範囲で指定してください。"
         )
     return StillImageConfig(
-        canvas_resolution=canvas_resolution,
+        resize_mode=resize_mode,
+        background_color=background_color,
+    )
+
+
+def _parse_videos(raw: Any, layout: LayoutConfig) -> VideoConfig:
+    if raw is None:
+        return VideoConfig()
+    if not isinstance(raw, dict):
+        raise ValueError("videosはオブジェクトで指定してください。")
+    unknown = set(raw).difference({"resize_mode", "background_color"})
+    if unknown:
+        raise ValueError(f"videosに未対応の設定があります: {sorted(unknown)}")
+
+    resize_mode = str(raw.get("resize_mode", "original"))
+    if resize_mode not in {"original", "contain"}:
+        raise ValueError(
+            "videos.resize_modeはoriginalまたはcontainを指定してください。"
+        )
+    if resize_mode == "contain" and layout.reference_resolution is None:
+        raise ValueError(
+            "videos.resize_mode=containには"
+            "layout.reference_resolutionが必要です。"
+        )
+
+    background_color = _pair_or_triplet(
+        raw.get("background_color", [0, 0, 0]),
+        "videos.background_color",
+        3,
+    )
+    if any(component < 0 or component > 255 for component in background_color):
+        raise ValueError(
+            "videos.background_colorは0から255の範囲で指定してください。"
+        )
+    return VideoConfig(
         resize_mode=resize_mode,
         background_color=background_color,
     )
