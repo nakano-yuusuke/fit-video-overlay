@@ -52,8 +52,11 @@
         "reference_resolution": [3840, 2160],
         "scale_mode": "fit"
     },
+    "videos": {
+        "resize_mode": "contain",
+        "background_color": [0, 0, 0]
+    },
     "still_images": {
-        "canvas_resolution": [3840, 2160],
         "resize_mode": "contain",
         "background_color": [0, 0, 0]
     },
