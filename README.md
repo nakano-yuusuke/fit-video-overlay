@@ -97,7 +97,8 @@ Top-level sections:
 | `contact_sheet` | Optional chronological source-media contact sheets and JSON. Relative `output_dir` values are resolved below `input.output_dir`. |
 | `layout.reference_resolution` | Reference media size for overlay layout coordinates, e.g. `[3840, 2160]`. |
 | `layout.scale_mode` | Layout scaling mode. `fit` scales overlays uniformly to each input media file's resolution. |
-| `still_images.canvas_resolution` | Output canvas size for still-image inputs. |
+| `videos.resize_mode` | `original` preserves the source size; `contain` fits the entire video inside a fixed canvas without cropping. |
+| `videos.background_color` | RGB color used to fill unused video canvas space in `contain` mode. |
 | `still_images.resize_mode` | `original` preserves the source size; `contain` fits the entire image inside the canvas without cropping. |
 | `still_images.background_color` | RGB color used to fill unused canvas space in `contain` mode. |
 | `encoding.codec` | FFmpeg video codec for the final output. |
@@ -119,13 +120,18 @@ Top-level sections:
 
 When `layout` is set, overlays are rendered at the reference size and each completed overlay layer is scaled during FFmpeg composition. If `layout` is omitted, overlay coordinates and sizes are used as fixed pixels for backward compatibility.
 
+When `videos.resize_mode` is `contain`, every video output uses
+`layout.reference_resolution`. Source frames are scaled uniformly and centered
+without cropping, and unused space is filled with `videos.background_color`.
+This keeps overlay sizes and positions identical across videos with different
+resolutions or aspect ratios.
+
 Still images use EXIF `DateTimeOriginal`, `DateTimeDigitized`, or `DateTime` as the shot time. EXIF offset tags are honored when present; otherwise EXIF timestamps are interpreted in the application display timezone. If no EXIF timestamp is available, the file modification time is used.
 
 When `still_images.resize_mode` is `contain`, still images are scaled uniformly
-and centered on `still_images.canvas_resolution` before overlays are composed.
+and centered on `layout.reference_resolution` before overlays are composed.
 The entire source image remains visible, and unused space is filled with
-`still_images.background_color`. Using the same canvas and layout reference
-resolution keeps still-image overlay positions identical to the video layout.
+`still_images.background_color`, while overlay positions use the same layout.
 
 `contact_sheet` samples each MP4 at `interval_seconds` and adds each JPEG/PNG
 once. Samples are sorted by corrected capture time and rendered without FIT
@@ -661,7 +667,8 @@ python fit2mp4.py /path/to/media_dir /path/to/activity.fit /path/to/output_dir
 | `still_exports` | 動画からの静止画書き出し設定。`enabled`, `positions`, `interval_seconds` を指定できます。 |
 | `contact_sheet` | 元動画・静止画の時系列コンタクトシートとJSON。相対 `output_dir` は `input.output_dir` の下として解決します。 |
 | `layout.reference_resolution` | overlay配置の基準にするメディアサイズ。例: `[3840, 2160]`。 |
-| `still_images.canvas_resolution` | 静止画入力の出力canvasサイズ。 |
+| `videos.resize_mode` | `original` は元サイズを維持し、`contain` は動画全体を切り取らず固定canvas内へ収めます。 |
+| `videos.background_color` | `contain` で生じる動画の余白を埋めるRGB背景色。 |
 | `still_images.resize_mode` | `original` は元サイズを維持し、`contain` は静止画全体を切り取らずcanvas内へ収めます。 |
 | `still_images.background_color` | `contain` で生じる余白を埋めるRGB背景色。 |
 | `layout.scale_mode` | 配置のスケール方式。`fit` は入力メディアの解像度に合わせてoverlayを等倍率で拡大縮小します。 |
@@ -684,13 +691,18 @@ python fit2mp4.py /path/to/media_dir /path/to/activity.fit /path/to/output_dir
 
 `layout` を指定した場合、overlayは基準サイズで描画され、完成したoverlayレイヤー全体をFFmpeg合成時に拡大縮小します。`layout` を省略した場合は、後方互換のため座標とサイズを固定pxとして扱います。
 
+`videos.resize_mode` を `contain` にすると、すべての動画出力が
+`layout.reference_resolution` に統一されます。元動画は切り取らず縦横比を保って
+中央配置され、余白は `videos.background_color` で埋められます。canvasと
+overlayが同じ基準解像度を使うため、解像度や縦横比が異なる動画間でも
+overlayのサイズと位置が一致します。
+
 静止画の時刻はEXIFの `DateTimeOriginal`、`DateTimeDigitized`、`DateTime` の順に使います。EXIFの時差タグがあればそれを反映し、なければアプリケーションの表示タイムゾーンとして解釈します。EXIF時刻がない場合はファイル更新時刻を使います。
 
 `still_images.resize_mode` を `contain` にすると、静止画はoverlay合成前に
-縦横比を保ったまま `still_images.canvas_resolution` 内へ中央配置されます。
+縦横比を保ったまま `layout.reference_resolution` 内へ中央配置されます。
 元画像は切り取られず、余白は `still_images.background_color` で埋められます。
-canvasと `layout.reference_resolution` を同じサイズにすると、動画と静止画の
-overlay位置が一致します。
+動画と静止画のoverlay位置も同じ基準解像度上で一致します。
 
 `contact_sheet` は各MP4を `interval_seconds` ごとに抽出し、JPEG/PNGは
 1ファイルにつき1回追加します。補正後の撮影時刻順に並べ、FIT overlayを

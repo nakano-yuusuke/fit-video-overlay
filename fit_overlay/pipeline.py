@@ -36,6 +36,7 @@ from .contact_sheet import ContactSheetResult, generate_contact_sheet
 from .data import load_fit_data, prepare_overlay_data
 from .frames import FrameMaker
 from .grade import add_grade
+from .media_canvas import ContainGeometry, contain_geometry
 from .next_poi import add_next_poi, filter_points_of_interest
 from .overlay_factory import OverlayFactory
 from .place_names import add_place_names
@@ -580,6 +581,7 @@ class OverlayVideoProcessor:
                 video_width=video_width,
                 video_height=video_height,
             )
+            frame = self._prepare_video_frame(frame)
             output_path = (
                 self.config.output_dir
                 / (
@@ -664,6 +666,7 @@ class OverlayVideoProcessor:
                     video_width=video_width,
                     video_height=video_height,
                 )
+                frame = self._prepare_video_frame(frame)
                 output_path = (
                     self.config.output_dir
                     / f"{video_path.stem}_still_{point.label}.jpg"
@@ -1228,8 +1231,26 @@ class OverlayVideoProcessor:
             shot_time,
             has_audio,
         )
+        canvas_geometry = self._video_canvas_geometry(video_width, video_height)
+        logger.info(
+            "video_canvas path=%s mode=%s source=%dx%d content=%dx%d "
+            "canvas=%dx%d offset=%d,%d",
+            video_path,
+            self.config.videos.resize_mode,
+            canvas_geometry.source_width,
+            canvas_geometry.source_height,
+            canvas_geometry.content_width,
+            canvas_geometry.content_height,
+            canvas_geometry.canvas_width,
+            canvas_geometry.canvas_height,
+            canvas_geometry.offset_x,
+            canvas_geometry.offset_y,
+        )
         self._log_media_data_coverage(video_path, shot_time, video_length, overlays)
-        scale = self._layout_scale(video_width, video_height)
+        scale = self._layout_scale(
+            canvas_geometry.canvas_width,
+            canvas_geometry.canvas_height,
+        )
         for spec in overlays:
             with _timed_step(
                 "prepare_overlay_video",
@@ -1259,12 +1280,11 @@ class OverlayVideoProcessor:
                 self._compose_video(
                     video_path,
                     fifo_infos,
-                    video_width=video_width,
-                    video_height=video_height,
                     video_length=video_length,
                     video_fps=video_fps,
                     layout_scale=scale,
                     has_audio=has_audio,
+                    canvas_geometry=canvas_geometry,
                 )
             for t in threads:
                 t.join()
@@ -1356,14 +1376,76 @@ class OverlayVideoProcessor:
         if still_images.resize_mode == "original":
             return source_width, source_height
         if still_images.resize_mode == "contain":
-            if still_images.canvas_resolution is None:
+            if self.config.layout.reference_resolution is None:
                 raise ValueError(
-                    "still_images.resize_mode=containにcanvas_resolutionが必要です。"
+                    "still_images.resize_mode=containに"
+                    "layout.reference_resolutionが必要です。"
                 )
-            return still_images.canvas_resolution
+            return self.config.layout.reference_resolution
         raise ValueError(
             f"未対応のstill_images.resize_modeです: {still_images.resize_mode}"
         )
+
+    def _video_canvas_geometry(
+        self,
+        source_width: int,
+        source_height: int,
+    ) -> ContainGeometry:
+        videos = self.config.videos
+        if videos.resize_mode == "original":
+            return contain_geometry(
+                source_width,
+                source_height,
+                source_width,
+                source_height,
+            )
+        if videos.resize_mode == "contain":
+            if self.config.layout.reference_resolution is None:
+                raise ValueError(
+                    "videos.resize_mode=containに"
+                    "layout.reference_resolutionが必要です。"
+                )
+            return contain_geometry(
+                source_width,
+                source_height,
+                *self.config.layout.reference_resolution,
+            )
+        raise ValueError(
+            f"未対応のvideos.resize_modeです: {videos.resize_mode}"
+        )
+
+    def _prepare_video_frame(self, image: np.ndarray) -> np.ndarray:
+        source_height, source_width = image.shape[:2]
+        geometry = self._video_canvas_geometry(source_width, source_height)
+        if not geometry.needs_resize and not geometry.needs_padding:
+            return image
+
+        if geometry.needs_resize:
+            scale = min(
+                geometry.content_width / source_width,
+                geometry.content_height / source_height,
+            )
+            interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            content = cv2.resize(
+                image,
+                (geometry.content_width, geometry.content_height),
+                interpolation=interpolation,
+            )
+        else:
+            content = image
+
+        canvas = np.full(
+            (geometry.canvas_height, geometry.canvas_width, 3),
+            self.config.videos.background_color,
+            dtype=np.uint8,
+        )
+        x = geometry.offset_x
+        y = geometry.offset_y
+        canvas[
+            y : y + geometry.content_height,
+            x : x + geometry.content_width,
+        ] = content
+        return canvas
 
     def _prepare_still_image(self, image: np.ndarray) -> np.ndarray:
         source_height, source_width = image.shape[:2]
@@ -1799,12 +1881,11 @@ class OverlayVideoProcessor:
         video_path: Path,
         fifo_infos: list[_OverlayFifo],
         *,
-        video_width: int,
-        video_height: int,
         video_length: float,
         video_fps: float,
         layout_scale: float,
         has_audio: bool,
+        canvas_geometry: ContainGeometry,
     ) -> None:
         input_options = {}
         if self.config.noautorotate:
@@ -1814,13 +1895,30 @@ class OverlayVideoProcessor:
         if transparent_output:
             composed = ffmpeg.input(
                 (
-                    f"color=color=black:s={video_width}x{video_height}:"
+                    f"color=color=black:s={canvas_geometry.canvas_width}x"
+                    f"{canvas_geometry.canvas_height}:"
                     f"d={video_length}:r={video_fps}"
                 ),
                 format="lavfi",
             ).filter("colorchannelmixer", aa=0).filter("format", "rgba")
         else:
             composed = source.video
+            if canvas_geometry.needs_resize:
+                composed = composed.filter(
+                    "scale",
+                    canvas_geometry.content_width,
+                    canvas_geometry.content_height,
+                )
+            if canvas_geometry.needs_padding:
+                red, green, blue = self.config.videos.background_color
+                composed = composed.filter(
+                    "pad",
+                    canvas_geometry.canvas_width,
+                    canvas_geometry.canvas_height,
+                    canvas_geometry.offset_x,
+                    canvas_geometry.offset_y,
+                    color=f"0x{red:02x}{green:02x}{blue:02x}",
+                )
         # JSON配列の順番を重なり順として、任意個のoverlayを合成する。
         for fi in fifo_infos:
             pix_fmt = "rgba" if fi.spec.frame_maker.has_alpha else "rgb24"

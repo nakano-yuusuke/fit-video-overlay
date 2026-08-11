@@ -10,12 +10,12 @@ import numpy as np
 from fit_overlay.config import (
     LayoutConfig,
     ProcessorConfig,
-    StillImageConfig,
+    VideoConfig,
     load_processor_config,
 )
 
 
-class StillImageConfigTest(unittest.TestCase):
+class VideoConfigTest(unittest.TestCase):
     def test_contain_uses_layout_reference_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -28,8 +28,8 @@ class StillImageConfigTest(unittest.TestCase):
                             "fit_path": "activity.fit",
                             "output_dir": "output",
                         },
-                        "layout": {"reference_resolution": [1920, 1080]},
-                        "still_images": {
+                        "layout": {"reference_resolution": [3840, 2160]},
+                        "videos": {
                             "resize_mode": "contain",
                             "background_color": [12, 34, 56],
                         },
@@ -41,8 +41,29 @@ class StillImageConfigTest(unittest.TestCase):
 
             config = load_processor_config(config_path)
 
-            self.assertEqual(config.still_images.resize_mode, "contain")
-            self.assertEqual(config.still_images.background_color, (12, 34, 56))
+            self.assertEqual(config.videos.resize_mode, "contain")
+            self.assertEqual(config.videos.background_color, (12, 34, 56))
+
+    def test_original_is_the_backward_compatible_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "input": {
+                            "mp4_dir": "media",
+                            "fit_path": "activity.fit",
+                            "output_dir": "output",
+                        },
+                        "overlays": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_processor_config(config_path)
+
+            self.assertEqual(config.videos.resize_mode, "original")
 
     def test_rejects_invalid_mode_and_background_color(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -55,7 +76,7 @@ class StillImageConfigTest(unittest.TestCase):
                 },
                 "overlays": [],
             }
-            for still_images in (
+            for videos in (
                 {"resize_mode": "cover"},
                 {"background_color": [0, 0, 256]},
                 {"resize_mode": "contain"},
@@ -63,15 +84,15 @@ class StillImageConfigTest(unittest.TestCase):
             ):
                 config_path = root / "config.json"
                 config_path.write_text(
-                    json.dumps({**base, "still_images": still_images}),
+                    json.dumps({**base, "videos": videos}),
                     encoding="utf-8",
                 )
                 with self.assertRaises(ValueError):
                     load_processor_config(config_path)
 
 
-class StillImageContainTest(unittest.TestCase):
-    def _processor(self):
+class VideoContainTest(unittest.TestCase):
+    def _processor(self, resize_mode: str = "contain"):
         from fit_overlay.pipeline import OverlayVideoProcessor
 
         config = ProcessorConfig(
@@ -79,33 +100,32 @@ class StillImageContainTest(unittest.TestCase):
             fit_path=Path("activity.fit"),
             output_dir=Path("output"),
             overlays=(),
-            layout=LayoutConfig(reference_resolution=(16, 9)),
-            still_images=StillImageConfig(
-                resize_mode="contain",
+            layout=LayoutConfig(reference_resolution=(16, 10)),
+            videos=VideoConfig(
+                resize_mode=resize_mode,
                 background_color=(10, 20, 30),
             ),
         )
         return OverlayVideoProcessor(config)
 
-    def test_landscape_image_is_centered_without_cropping(self) -> None:
-        source = np.full((3, 4, 3), (200, 100, 50), dtype=np.uint8)
+    def test_four_by_three_frame_is_centered_without_cropping(self) -> None:
+        source = np.full((6, 8, 3), (200, 100, 50), dtype=np.uint8)
 
-        result = self._processor()._prepare_still_image(source)
+        result = self._processor()._prepare_video_frame(source)
 
-        self.assertEqual(result.shape, (9, 16, 4))
-        self.assertTrue(np.all(result[:, :2, :3] == (10, 20, 30)))
-        self.assertTrue(np.all(result[:, 14:, :3] == (10, 20, 30)))
-        self.assertTrue(np.all(result[:, 2:14, :3] == (200, 100, 50)))
+        self.assertEqual(result.shape, (10, 16, 3))
+        self.assertTrue(np.all(result[:, :2] == (10, 20, 30)))
+        self.assertTrue(np.all(result[:, 14:] == (10, 20, 30)))
+        self.assertTrue(np.all(result[:, 2:14] == (200, 100, 50)))
 
-    def test_portrait_image_is_centered_without_cropping(self) -> None:
-        source = np.full((4, 3, 3), (50, 100, 200), dtype=np.uint8)
+    def test_original_mode_returns_the_source_frame(self) -> None:
+        source = np.full((8, 6, 3), (200, 100, 50), dtype=np.uint8)
 
-        result = self._processor()._prepare_still_image(source)
+        result = self._processor(resize_mode="original")._prepare_video_frame(
+            source
+        )
 
-        self.assertEqual(result.shape, (9, 16, 4))
-        self.assertTrue(np.all(result[:, :4, :3] == (10, 20, 30)))
-        self.assertTrue(np.all(result[:, 11:, :3] == (10, 20, 30)))
-        self.assertTrue(np.all(result[:, 4:11, :3] == (50, 100, 200)))
+        self.assertIs(result, source)
 
 
 if __name__ == "__main__":
