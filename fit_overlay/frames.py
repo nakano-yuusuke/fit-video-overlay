@@ -414,6 +414,7 @@ class GraphFrameMaker(FrameMaker):
         value_thickness: int = 2,
         empty_text: str = "-",
         show_poi: bool = False,
+        poi_position: str = "top",
         poi_font_size: int | None = None,
         poi_font_path: Path | None = None,
         poi_color: tuple[int, int, int] = (255, 255, 255),
@@ -472,6 +473,7 @@ class GraphFrameMaker(FrameMaker):
         self.value_thickness = value_thickness
         self.empty_text = empty_text
         self.show_poi = show_poi
+        self.poi_position = poi_position
         self.poi_font_size = poi_font_size or 22
         self.poi_font_path = poi_font_path
         self.poi_color = poi_color
@@ -1626,7 +1628,7 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
                 frame,
                 poi,
                 x,
-                plot_top + 6,
+                self._poi_marker_y(plot_top, plot_bottom),
                 icons=self.poi_icons,
                 color=self.poi_color,
                 font_path=self.poi_font_path,
@@ -1634,7 +1636,7 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
                 thickness=self.poi_thickness,
             )
             row = displayed_index % min(label_rows, 3)
-            y = plot_top + self.poi_font_size + 3 + row * (self.poi_font_size + 4)
+            y = self._poi_label_y(row, plot_top, plot_bottom)
             rendered = draw_text(
                 frame,
                 poi.display_text,
@@ -1647,6 +1649,17 @@ class MatplotlibStripGraphFrameMaker(GraphFrameMaker):
             )
             frame[:, :] = rendered
             displayed_index += 1
+
+    def _poi_marker_y(self, plot_top: int, plot_bottom: int) -> int:
+        if self.poi_position == "bottom":
+            return plot_bottom - 6
+        return plot_top + 6
+
+    def _poi_label_y(self, row: int, plot_top: int, plot_bottom: int) -> int:
+        row_offset = row * (self.poi_font_size + 4)
+        if self.poi_position == "bottom":
+            return plot_bottom - 3 - row_offset
+        return plot_top + self.poi_font_size + 3 + row_offset
 
     def _poi_frame_x(
         self,

@@ -9,6 +9,53 @@ from fit_overlay.config import GraphOverlayConfig, load_processor_config
 
 
 class GraphConfigTest(unittest.TestCase):
+    def _load_minimal_graph(self, **options: object) -> GraphOverlayConfig:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            graph = {
+                "id": "graph",
+                "type": "graph",
+                "x": 0,
+                "y": 0,
+                "width": 320,
+                "height": 120,
+                "column": "speed",
+                **options,
+            }
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "input": {
+                            "mp4_dir": "media",
+                            "fit_path": "activity.fit",
+                            "output_dir": "output",
+                        },
+                        "overlays": [graph],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            overlay = load_processor_config(config_path).overlays[0]
+        self.assertIsInstance(overlay, GraphOverlayConfig)
+        return overlay
+
+    def test_poi_position_defaults_to_top(self) -> None:
+        overlay = self._load_minimal_graph()
+
+        self.assertEqual(overlay.poi_position, "top")
+
+    def test_poi_position_accepts_bottom(self) -> None:
+        overlay = self._load_minimal_graph(poi_position="bottom")
+
+        self.assertEqual(overlay.poi_position, "bottom")
+
+    def test_poi_position_rejects_unknown_value(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "graphのpoi_positionはtopまたはbottom",
+        ):
+            self._load_minimal_graph(poi_position="center")
+
     def test_gpx_series_uses_route_domain_without_route_altitude_feature(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

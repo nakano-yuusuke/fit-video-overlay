@@ -155,6 +155,7 @@ class GraphOverlayConfig(OverlayConfig):
     value_thickness: int = 2
     empty_text: str = "-"
     show_poi: bool = False
+    poi_position: str = "top"
     poi_icon_size: tuple[int, int] | None = None
     poi_match_threshold_m: float = 300.0
     poi_text: TextStyleConfig = TextStyleConfig(
@@ -1076,6 +1077,7 @@ def _parse_overlay(
                 "value_thickness",
                 "empty_text",
                 "show_poi",
+                "poi_position",
                 "poi_icon_size",
                 "poi_match_threshold_m",
                 "poi_text",
@@ -1108,6 +1110,11 @@ def _parse_overlay(
         if axes_layer_order not in {"front", "behind"}:
             raise ValueError(
                 "graphのaxes_layer_orderはfrontまたはbehindを指定してください。"
+            )
+        poi_position = str(raw.get("poi_position", "top"))
+        if poi_position not in {"top", "bottom"}:
+            raise ValueError(
+                "graphのpoi_positionはtopまたはbottomを指定してください。"
             )
         x_domain = str(raw.get("x_domain", "data"))
         if x_domain not in {"data", "route"}:
@@ -1269,6 +1276,7 @@ def _parse_overlay(
             value_thickness=value_text.thickness,
             empty_text=str(raw.get("empty_text", "-")),
             show_poi=bool(raw.get("show_poi", False)),
+            poi_position=poi_position,
             poi_icon_size=_optional_size(
                 raw.get("poi_icon_size"),
                 f"overlays.{common['id']}.poi_icon_size",
