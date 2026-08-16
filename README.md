@@ -259,6 +259,7 @@ Shared text style keys:
 | `show_value` | Whether to display the current numeric value. |
 | `value_text` | Text style object for the current value. |
 | `show_poi` | Draw shared points of interest on `matplotlib_strip` graphs. POIs are anchored by GPX route progress and can be mapped to elapsed time, `distance`, or `route_progress_m` X axes. |
+| `poi_position` | POI icon and label position: `top` (default) or `bottom`. |
 | `poi_icon_size` | Optional overlay-specific POI PNG size `[width, height]`. Overrides `points_of_interest` icon sizes. |
 | `poi_match_threshold_m` | Maximum nearest FIT-to-POI route-progress distance used when mapping POIs to elapsed time or another X column. Defaults to `300`. |
 | `poi_text` | Text style object for POI labels. |
@@ -830,6 +831,7 @@ overlay共通設定:
 | `show_value` | 現在値テキストを表示するか。 |
 | `value_text` | 現在値テキストのスタイル設定。 |
 | `show_poi` | `matplotlib_strip` グラフに共通POIを表示するか。POIはGPXルート進捗を基準に、経過時間、`distance`、`route_progress_m` のX軸へ変換して表示できます。 |
+| `poi_position` | POIアイコンとラベルの位置。`top`（デフォルト）または `bottom`。 |
 | `poi_icon_size` | overlayごとのPOI PNGサイズ `[width, height]`。`points_of_interest` 側のアイコンサイズを上書きします。 |
 | `poi_match_threshold_m` | POIを経過時間や別のX軸列へ変換するときに許容する、FIT側ルート進捗との最大距離。デフォルトは `300`。 |
 | `poi_text` | POIラベルの文字スタイル設定。 |

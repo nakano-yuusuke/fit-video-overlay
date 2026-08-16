@@ -220,6 +220,7 @@ class OverlayFactory:
             value_thickness=config.value_thickness,
             empty_text=config.empty_text,
             show_poi=config.show_poi,
+            poi_position=config.poi_position,
             poi_font_size=config.poi_text.font_size,
             poi_font_path=config.poi_text.font_path,
             poi_color=config.poi_text.color,

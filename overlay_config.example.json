@@ -237,6 +237,7 @@
             "show_current_marker": true,
             "current_marker_color": [255, 80, 80],
             "show_poi": true,
+            "poi_position": "bottom",
             "poi_icon_size": [20, 20],
             "poi_text": {
                 "font_size": 20,

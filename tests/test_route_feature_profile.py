@@ -107,11 +107,13 @@ class RouteFeatureProfileTest(unittest.TestCase):
             x_multiplier=0.001,
             column="traffic_signal_count_per_km",
             line_draw_style="steps-post",
+            poi_position="bottom",
         )
 
         frame_maker = factory.create(config, self.fit_data)
 
         self.assertIsInstance(frame_maker, MatplotlibStripGraphFrameMaker)
+        self.assertEqual(frame_maker.poi_position, "bottom")
         self.assertEqual(frame_maker._explicit_x_domain, (0.0, 3.0))
         self.assertEqual(len(frame_maker.graph_series), 1)
         series = frame_maker.graph_series[0]
