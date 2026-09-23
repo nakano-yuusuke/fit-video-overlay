@@ -90,6 +90,7 @@ Top-level sections:
 | `input.output_dir` | Directory where generated overlays and final media are written. |
 | `processing.default_refresh_rate_hz` | Default overlay refresh rate when an overlay does not specify one. |
 | `processing.fit_time_offset_seconds` | Time offset applied to FIT timestamps for camera synchronization. |
+| `processing.fit_time_offsets` | Optional stepped offsets applied to raw FIT timestamps. Each item has a timezone-aware ISO 8601 `from` value and an absolute `offset_seconds` value. |
 | `processing.media_time_offsets` | Optional stepped offsets applied to video metadata times. Each item has `from` and `offset_seconds`; still image inputs are not affected. |
 | `processing.max_fit_duration_minutes` | Optional maximum FIT duration to load; `null` loads the full FIT. |
 | `processing.max_parallel_videos` | Maximum number of videos processed concurrently. Parallel video processing requires Linux or WSL2. |
@@ -117,6 +118,17 @@ Top-level sections:
 | `encoding.noautorotate` | Pass `-noautorotate` to FFmpeg/FFprobe inputs when true. Useful when action-camera rotation metadata should be ignored. |
 | `styles.background` | Default overlay background style. Overlays can override it with their own `background`. |
 | `styles.text` | Default text style inherited by text-based overlays. |
+
+`fit_time_offsets` rules use uncorrected FIT timestamps and remain active until
+the next rule. `offset_seconds` is the absolute offset for that interval, not an
+amount added to the previous rule:
+
+```json
+"fit_time_offset_seconds": 0,
+"fit_time_offsets": [
+  {"from": "2024-09-28T13:24:23Z", "offset_seconds": 10493}
+]
+```
 
 When `layout` is set, overlays are rendered at the reference size and each completed overlay layer is scaled during FFmpeg composition. If `layout` is omitted, overlay coordinates and sizes are used as fixed pixels for backward compatibility.
 
@@ -662,6 +674,7 @@ python fit2mp4.py /path/to/media_dir /path/to/activity.fit /path/to/output_dir
 | `input.output_dir` | 生成したoverlayと最終メディアの出力先。 |
 | `processing.default_refresh_rate_hz` | overlayごとの指定がない場合のデフォルト更新レート。 |
 | `processing.fit_time_offset_seconds` | カメラ同期用にFIT時刻へ加える補正秒数。 |
+| `processing.fit_time_offsets` | 補正前のFIT時刻を基準に段階的な補正を指定します。各項目はタイムゾーン付きISO 8601形式の `from` と、区間の絶対補正値 `offset_seconds` を持ちます。 |
 | `processing.media_time_offsets` | 動画メタデータ時刻へ段階的に加える補正。各項目は `from` と `offset_seconds` を持ちます。静止画入力には適用されません。 |
 | `processing.max_fit_duration_minutes` | 読み込むFITの最大時間。`null` なら全体を読み込みます。 |
 | `processing.max_parallel_videos` | 同時に処理する動画数の上限。並列動画処理にはLinuxまたはWSL2が必要です。 |
@@ -689,6 +702,17 @@ python fit2mp4.py /path/to/media_dir /path/to/activity.fit /path/to/output_dir
 | `encoding.noautorotate` | trueの場合、FFmpeg/FFprobe入力に `-noautorotate` を渡します。アクションカメラの回転メタデータを無視したい場合に使います。 |
 | `styles.background` | overlay背景のデフォルト設定。各overlayの `background` で上書きできます。 |
 | `styles.text` | 文字系overlayが継承するデフォルト文字スタイル。 |
+
+`fit_time_offsets` の判定には補正前のFIT時刻を使い、各ルールは次のルールまで
+有効です。`offset_seconds` は前のルールへの加算値ではなく、その区間に適用する
+絶対補正値です。
+
+```json
+"fit_time_offset_seconds": 0,
+"fit_time_offsets": [
+  {"from": "2024-09-28T13:24:23Z", "offset_seconds": 10493}
+]
+```
 
 `layout` を指定した場合、overlayは基準サイズで描画され、完成したoverlayレイヤー全体をFFmpeg合成時に拡大縮小します。`layout` を省略した場合は、後方互換のため座標とサイズを固定pxとして扱います。
 

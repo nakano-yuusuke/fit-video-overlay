@@ -364,6 +364,12 @@ class MediaTimeOffsetConfig:
 
 
 @dataclass(frozen=True)
+class FitTimeOffsetConfig:
+    from_timestamp: datetime.datetime
+    offset_seconds: float
+
+
+@dataclass(frozen=True)
 class ContactSheetJsonFieldConfig:
     source_column: str
     output_name: str
@@ -426,6 +432,7 @@ class ProcessorConfig:
     contact_sheet: ContactSheetConfig = ContactSheetConfig()
     default_refresh_rate_hz: float = 59.94 / 4
     fit_time_offset_seconds: float = 0.0
+    fit_time_offsets: tuple[FitTimeOffsetConfig, ...] = ()
     media_time_offsets: tuple[MediaTimeOffsetConfig, ...] = ()
     max_fit_duration_minutes: float | None = 60.0
     video_codec: str = "libx265"
@@ -575,6 +582,9 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         default_refresh_rate_hz=default_refresh_rate_hz,
         fit_time_offset_seconds=float(
             processing.get("fit_time_offset_seconds", 0.0)
+        ),
+        fit_time_offsets=_parse_fit_time_offsets(
+            processing.get("fit_time_offsets")
         ),
         media_time_offsets=_parse_media_time_offsets(
             processing.get("media_time_offsets")
@@ -811,6 +821,55 @@ def _parse_media_time_offsets(raw: Any) -> tuple[MediaTimeOffsetConfig, ...]:
                 offset_seconds=float(_required(item, "offset_seconds")),
             )
         )
+    return tuple(offsets)
+
+
+def _parse_fit_time_offsets(raw: Any) -> tuple[FitTimeOffsetConfig, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("processing.fit_time_offsetsは配列で指定してください。")
+
+    offsets: list[FitTimeOffsetConfig] = []
+    seen: set[datetime.datetime] = set()
+    for index, item in enumerate(raw):
+        path = f"processing.fit_time_offsets[{index}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}はオブジェクトで指定してください。")
+        unknown = set(item).difference({"from", "offset_seconds"})
+        if unknown:
+            raise ValueError(f"{path}に未対応の設定があります: {sorted(unknown)}")
+
+        from_value = str(_required(item, "from")).strip()
+        if not from_value:
+            raise ValueError(f"{path}.fromは空にできません。")
+        try:
+            from_timestamp = datetime.datetime.fromisoformat(
+                from_value.replace("Z", "+00:00")
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"{path}.fromはISO 8601形式で指定してください: {from_value}"
+            ) from error
+        if from_timestamp.tzinfo is None or from_timestamp.utcoffset() is None:
+            raise ValueError(
+                f"{path}.fromにはタイムゾーンを指定してください: {from_value}"
+            )
+        from_timestamp = from_timestamp.astimezone(datetime.timezone.utc)
+        if from_timestamp in seen:
+            raise ValueError(
+                "processing.fit_time_offsets.fromが重複しています: "
+                f"{from_value}"
+            )
+        seen.add(from_timestamp)
+        offsets.append(
+            FitTimeOffsetConfig(
+                from_timestamp=from_timestamp,
+                offset_seconds=float(_required(item, "offset_seconds")),
+            )
+        )
+
+    offsets.sort(key=lambda item: item.from_timestamp)
     return tuple(offsets)
 
 

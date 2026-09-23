@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from fit2csv import fit2df
+from .config import FitTimeOffsetConfig
 from .time_utils import to_utc_datetime_index
 
 
@@ -21,6 +22,7 @@ def load_fit_data(
     fit_path: Path,
     *,
     time_offset: pd.Timedelta = pd.Timedelta(0),
+    time_offsets: tuple[FitTimeOffsetConfig, ...] = (),
     max_duration: pd.Timedelta | None = pd.Timedelta(minutes=60),
 ) -> pd.DataFrame:
     """FITを時系列DataFrameとして読み込み、比較用の時刻をUTCへ統一する。"""
@@ -42,9 +44,17 @@ def load_fit_data(
             data[standard_name] = data[source_name]
 
     # 動画のcreation_timeもUTCで扱うため、FIT側もUTCへ統一しておく。
-    data["timestamp"] = to_utc_datetime_index(data["timestamp"])
-    data["timestamp"] = data["timestamp"] + time_offset
-    data = data.sort_values("timestamp")
+    raw_timestamps = to_utc_datetime_index(data["timestamp"])
+    offset_seconds = np.full(len(data), time_offset.total_seconds(), dtype=float)
+    for item in sorted(time_offsets, key=lambda value: value.from_timestamp):
+        from_timestamp = pd.Timestamp(item.from_timestamp)
+        offset_seconds[raw_timestamps >= from_timestamp] = item.offset_seconds
+    data["timestamp"] = raw_timestamps + pd.to_timedelta(offset_seconds, unit="s")
+    data = data.sort_values("timestamp", kind="stable")
+    # A backward stepped offset can map records on both sides of the boundary to
+    # the same corrected timestamp. Prefer the later raw FIT record, which is the
+    # one governed by the newly active rule, and keep the time index unique.
+    data = data.drop_duplicates(subset="timestamp", keep="last")
 
     # 現状は長時間のFITをすべて展開しないよう、先頭60分に制限している。
     if max_duration is not None:
