@@ -874,6 +874,9 @@ class OverlayVideoProcessor:
                 self.config.fit_path,
                 time_offset=pd.Timedelta(seconds=self.config.fit_time_offset_seconds),
                 time_offsets=self.config.fit_time_offsets,
+                timestamp_correlation_enabled=(
+                    self.config.fit_timestamp_correlation.enabled
+                ),
                 max_duration=max_duration,
             )
         logger.info(

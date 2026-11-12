@@ -8,6 +8,9 @@
         "default_refresh_rate_hz": 14.985,
         "fit_time_offset_seconds": 0.0,
         "fit_time_offsets": [],
+        "fit_timestamp_correlation": {
+            "enabled": false
+        },
         "max_fit_duration_minutes": null
     },
     "contact_sheet": {

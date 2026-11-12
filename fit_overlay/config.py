@@ -370,6 +370,11 @@ class FitTimeOffsetConfig:
 
 
 @dataclass(frozen=True)
+class FitTimestampCorrelationConfig:
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
 class ContactSheetJsonFieldConfig:
     source_column: str
     output_name: str
@@ -433,6 +438,9 @@ class ProcessorConfig:
     default_refresh_rate_hz: float = 59.94 / 4
     fit_time_offset_seconds: float = 0.0
     fit_time_offsets: tuple[FitTimeOffsetConfig, ...] = ()
+    fit_timestamp_correlation: FitTimestampCorrelationConfig = (
+        FitTimestampCorrelationConfig()
+    )
     media_time_offsets: tuple[MediaTimeOffsetConfig, ...] = ()
     max_fit_duration_minutes: float | None = 60.0
     video_codec: str = "libx265"
@@ -585,6 +593,9 @@ def load_processor_config(path: Path) -> ProcessorConfig:
         ),
         fit_time_offsets=_parse_fit_time_offsets(
             processing.get("fit_time_offsets")
+        ),
+        fit_timestamp_correlation=_parse_fit_timestamp_correlation(
+            processing.get("fit_timestamp_correlation")
         ),
         media_time_offsets=_parse_media_time_offsets(
             processing.get("media_time_offsets")
@@ -822,6 +833,21 @@ def _parse_media_time_offsets(raw: Any) -> tuple[MediaTimeOffsetConfig, ...]:
             )
         )
     return tuple(offsets)
+
+
+def _parse_fit_timestamp_correlation(raw: Any) -> FitTimestampCorrelationConfig:
+    if raw is None:
+        return FitTimestampCorrelationConfig()
+    path = "processing.fit_timestamp_correlation"
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}はオブジェクトで指定してください。")
+    unknown = set(raw).difference({"enabled"})
+    if unknown:
+        raise ValueError(f"{path}に未対応の設定があります: {sorted(unknown)}")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"{path}.enabledはtrueまたはfalseで指定してください。")
+    return FitTimestampCorrelationConfig(enabled=enabled)
 
 
 def _parse_fit_time_offsets(raw: Any) -> tuple[FitTimeOffsetConfig, ...]:

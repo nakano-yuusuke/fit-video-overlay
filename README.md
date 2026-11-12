@@ -91,6 +91,7 @@ Top-level sections:
 | `processing.default_refresh_rate_hz` | Default overlay refresh rate when an overlay does not specify one. |
 | `processing.fit_time_offset_seconds` | Time offset applied to FIT timestamps for camera synchronization. |
 | `processing.fit_time_offsets` | Optional stepped offsets applied to raw FIT timestamps. Each item has a timezone-aware ISO 8601 `from` value and an absolute `offset_seconds` value. |
+| `processing.fit_timestamp_correlation.enabled` | Opt in to mapping FIT record timestamps to the device's internal clock using `timestamp_correlation`. Defaults to `false`. |
 | `processing.media_time_offsets` | Optional stepped offsets applied to video metadata times. Each item has `from` and `offset_seconds`; still image inputs are not affected. |
 | `processing.max_fit_duration_minutes` | Optional maximum FIT duration to load; `null` loads the full FIT. |
 | `processing.max_parallel_videos` | Maximum number of videos processed concurrently. Parallel video processing requires Linux or WSL2. |
@@ -129,6 +130,39 @@ amount added to the previous rule:
   {"from": "2024-09-28T13:24:23Z", "offset_seconds": 10493}
 ]
 ```
+
+To use the internal clock recorded in FIT `timestamp_correlation` messages:
+
+```json
+"fit_timestamp_correlation": {
+  "enabled": true
+}
+```
+
+The correction is `corrected_record_time = raw_record_time - (timestamp -
+system_timestamp)`. The full difference, including the initial difference, is
+subtracted. Differences are linearly interpolated at the original record times;
+the nearest endpoint difference is held outside the sample range. A single valid
+sample applies a constant difference. No anchors, reference setting, scaling, or
+smoothing are used. Subsecond timestamp fields are honored; `*_ms` takes
+precedence over `fractional_*` if both representations are present.
+
+This is an explicit clock conversion for rides where the internal clock matches
+the media. It does not establish that the internal clock is accurate UTC.
+When enabled, missing usable correlation data or conflicting mappings at the
+same UTC time cause an error. Incomplete messages are skipped with a warning.
+Correlations and records are read in one pass, and the source FIT is never edited.
+
+The correlation correction is applied before manual FIT offsets and before
+derived columns, route margins, maps, and graphs are built. Manual
+`fit_time_offsets.from` boundaries still use the original, uncorrected FIT times,
+and their selected offsets are added after the clock conversion. Video-only
+`media_time_offsets` remains independent. Corrected records are sorted and, if
+timestamps coincide, the later source record is retained; the number removed is
+logged. Logs also show the correlation range, applied offsets, records outside
+that range, and any backward steps before sorting. The FIT duration limit is
+applied after correction. Omitted or disabled correlation settings preserve the
+existing behavior without requiring correlation messages.
 
 When `layout` is set, overlays are rendered at the reference size and each completed overlay layer is scaled during FFmpeg composition. If `layout` is omitted, overlay coordinates and sizes are used as fixed pixels for backward compatibility.
 
@@ -675,6 +709,7 @@ python fit2mp4.py /path/to/media_dir /path/to/activity.fit /path/to/output_dir
 | `processing.default_refresh_rate_hz` | overlayごとの指定がない場合のデフォルト更新レート。 |
 | `processing.fit_time_offset_seconds` | カメラ同期用にFIT時刻へ加える補正秒数。 |
 | `processing.fit_time_offsets` | 補正前のFIT時刻を基準に段階的な補正を指定します。各項目はタイムゾーン付きISO 8601形式の `from` と、区間の絶対補正値 `offset_seconds` を持ちます。 |
+| `processing.fit_timestamp_correlation.enabled` | `timestamp_correlation`を使い、FITの走行レコード時刻を機器の内部時計へ変換します。省略時は`false`。 |
 | `processing.media_time_offsets` | 動画メタデータ時刻へ段階的に加える補正。各項目は `from` と `offset_seconds` を持ちます。静止画入力には適用されません。 |
 | `processing.max_fit_duration_minutes` | 読み込むFITの最大時間。`null` なら全体を読み込みます。 |
 | `processing.max_parallel_videos` | 同時に処理する動画数の上限。並列動画処理にはLinuxまたはWSL2が必要です。 |
@@ -713,6 +748,35 @@ python fit2mp4.py /path/to/media_dir /path/to/activity.fit /path/to/output_dir
   {"from": "2024-09-28T13:24:23Z", "offset_seconds": 10493}
 ]
 ```
+
+FITの`timestamp_correlation`に記録された内部時計へ変換する場合は、次を指定します。
+
+```json
+"fit_timestamp_correlation": {
+  "enabled": true
+}
+```
+
+補正式は`補正後record時刻 = 元record時刻 − (timestamp − system_timestamp)`です。
+最初の時計差も含めて、そのまま差し引きます。各recordの元時刻における時計差を
+前後の相関データで線形補間し、相関データの範囲外では端の差を維持します。
+有効な相関が1件だけなら一定の差を適用します。アンカー・reference・倍率・平滑化の
+設定はありません。小数秒フィールドにも対応し、`*_ms`と`fractional_*`の両方が
+ある場合は`*_ms`を優先します。
+
+これは、内部時計がメディアと一致するライド向けに明示的に選択する時刻変換です。
+内部時計が正確なUTCであると保証するものではありません。有効時に利用できる
+相関データがない場合や、同一UTCに異なる内部時計がある場合はエラーにします。
+一部フィールドが欠けたメッセージは警告して除外します。走行レコードと相関データは
+1回の読込で取得し、元FITファイルは変更しません。
+
+時刻相関補正の後に手動のFIT補正を加算し、その時刻で派生列・貯金・地図・グラフを
+計算します。`fit_time_offsets.from`の判定には、相関補正前の元FIT時刻を使います。
+動画専用の`media_time_offsets`は独立して適用できます。補正後は時刻順に並べ、
+時刻が重複する場合は元FITの後のレコードを残し、除外件数をログに記録します。
+相関データの期間・補正秒数・範囲外のレコード数・並べ替え前の時刻逆転数もログに
+記録します。FITの最大読込時間は補正後に適用します。設定を省略、または無効に
+すると従来どおりに動作し、相関データも不要です。
 
 `layout` を指定した場合、overlayは基準サイズで描画され、完成したoverlayレイヤー全体をFFmpeg合成時に拡大縮小します。`layout` を省略した場合は、後方互換のため座標とサイズを固定pxとして扱います。
 
