@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from fit2csv import fit2df
+from fit2csv import fit2df, fit2df_with_correlations
 from .config import FitTimeOffsetConfig
 from .time_utils import to_utc_datetime_index
+from .timestamp_correlation import correct_fit_timestamps
+
+
+logger = logging.getLogger(__name__)
 
 
 COLUMN_ALIASES = {
@@ -23,10 +28,15 @@ def load_fit_data(
     *,
     time_offset: pd.Timedelta = pd.Timedelta(0),
     time_offsets: tuple[FitTimeOffsetConfig, ...] = (),
+    timestamp_correlation_enabled: bool = False,
     max_duration: pd.Timedelta | None = pd.Timedelta(minutes=60),
 ) -> pd.DataFrame:
     """FITを時系列DataFrameとして読み込み、比較用の時刻をUTCへ統一する。"""
-    data = fit2df(str(fit_path)).copy()
+    if timestamp_correlation_enabled:
+        data, correlations = fit2df_with_correlations(str(fit_path))
+    else:
+        data = fit2df(str(fit_path))
+    data = data.copy()
     if data.empty:
         raise ValueError(f"FITファイルにrecordデータがありません: {fit_path}")
     if "timestamp" not in data.columns:
@@ -45,15 +55,28 @@ def load_fit_data(
 
     # 動画のcreation_timeもUTCで扱うため、FIT側もUTCへ統一しておく。
     raw_timestamps = to_utc_datetime_index(data["timestamp"])
+    corrected_timestamps = (
+        correct_fit_timestamps(raw_timestamps, correlations)
+        if timestamp_correlation_enabled
+        else raw_timestamps
+    )
+    # 手動補正ルールは、時刻相関補正前の元FIT時刻で判定する。
     offset_seconds = np.full(len(data), time_offset.total_seconds(), dtype=float)
     for item in sorted(time_offsets, key=lambda value: value.from_timestamp):
         from_timestamp = pd.Timestamp(item.from_timestamp)
         offset_seconds[raw_timestamps >= from_timestamp] = item.offset_seconds
-    data["timestamp"] = raw_timestamps + pd.to_timedelta(offset_seconds, unit="s")
+    data["timestamp"] = corrected_timestamps + pd.to_timedelta(
+        offset_seconds, unit="s"
+    )
     data = data.sort_values("timestamp", kind="stable")
-    # A backward stepped offset can map records on both sides of the boundary to
-    # the same corrected timestamp. Prefer the later raw FIT record, which is the
-    # one governed by the newly active rule, and keep the time index unique.
+    # 時刻相関や手動補正で同時刻へ写った場合は、元FITの後の行を優先する。
+    duplicate_count = int(data["timestamp"].duplicated(keep="last").sum())
+    if timestamp_correlation_enabled and duplicate_count:
+        logger.warning(
+            "fit_timestamp_correlation duplicate_corrected_timestamps=%d; "
+            "keeping the later source record",
+            duplicate_count,
+        )
     data = data.drop_duplicates(subset="timestamp", keep="last")
 
     # 現状は長時間のFITをすべて展開しないよう、先頭60分に制限している。
